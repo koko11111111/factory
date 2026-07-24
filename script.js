@@ -11,7 +11,7 @@
     orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
   };
 
-  const IMAGE_SEARCH_ENDPOINT = "https://api.openverse.org/v1/images/";
+  const IMAGE_SEARCH_ENDPOINT = "https://commons.wikimedia.org/w/api.php";
 
   let view = "dashboard"; // dashboard | fabrics | products | orders | orderDetail
   let activeOrderId = null;
@@ -728,13 +728,30 @@
   }
 
   async function fetchImageSearchResults(query){
-    const url = IMAGE_SEARCH_ENDPOINT + '?format=json&page_size=8&q=' + encodeURIComponent(query);
-    const res = await fetch(url);
+    const params = new URLSearchParams({
+      action: 'query',
+      generator: 'search',
+      gsrsearch: query,
+      gsrlimit: '12',
+      gsrnamespace: '6', // File: namespace
+      prop: 'imageinfo',
+      iiprop: 'url|mime',
+      iiurlwidth: '300',
+      format: 'json',
+      origin: '*' // required for anonymous cross-origin requests to the MediaWiki API
+    });
+    const res = await fetch(IMAGE_SEARCH_ENDPOINT + '?' + params.toString());
     if(!res.ok) throw new Error('search failed');
     const data = await res.json();
-    return (data.results||[])
-      .map(r => ({ url: r.url || r.thumbnail, thumb: r.thumbnail || r.url }))
-      .filter(x => x.thumb);
+    const pages = (data.query && data.query.pages) || {};
+    return Object.values(pages)
+      .map(p => {
+        const info = p.imageinfo && p.imageinfo[0];
+        if(!info || !info.url) return null;
+        if(info.mime && !/^image\//.test(info.mime)) return null; // skip audio/video/pdf files
+        return { url: info.url, thumb: info.thumburl || info.url };
+      })
+      .filter(Boolean);
   }
 
   function searchBoxHtml(key, q){

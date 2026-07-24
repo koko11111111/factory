@@ -31,11 +31,11 @@ python3 -m http.server
 - **Images** — each fabric and each product can have a photo, added three ways:
   - Upload a photo from your device (resized/compressed automatically before saving).
   - Paste a direct image URL.
-  - Use **"🔍 بحث عن صورة"** to search openly-licensed photos (via the [Openverse](https://openverse.org) API, no key required) and pick one with a click.
+  - Use **"🔍 بحث عن صورة"** to search photos from [Wikimedia Commons](https://commons.wikimedia.org) (free, no key required) and pick one with a click.
   - Thumbnails then show up in the Fabrics/Products tables and next to each item inside an order.
 
 ## Notes
 
 - Data persists per-browser via `localStorage`; clearing site data/cache will erase it. Uploaded images are stored inline as part of that data, so keep an eye on storage size if you add many photos.
-- The in-app image search calls `api.openverse.org` directly from the browser — it needs an internet connection and won't work if that request is blocked (e.g. some corporate networks). Uploading a file or pasting a URL always works offline-safe by comparison (URL images still need the internet to load, but don't depend on that specific API).
+- The in-app image search calls `commons.wikimedia.org` directly from the browser (using MediaWiki's documented `origin=*` CORS support, so no backend/proxy is needed). It still needs an internet connection and won't work if that request happens to be blocked on a given network. Uploading a file or pasting a URL doesn't depend on that specific API and is a reliable fallback.
 - The UI is in Arabic (RTL layout).
