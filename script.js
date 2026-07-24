@@ -452,7 +452,13 @@
   }
 
   function fabricsHtml(){
-    const list = state.fabrics.filter(f => matches(f.code) || matches(f.color));
+    const matchActive = !!imageMatchResults.fabrics;
+    let list = state.fabrics.filter(f => matches(f.code) || matches(f.color));
+    let matchMap = null;
+    if(matchActive){
+      matchMap = new Map(imageMatchResults.fabrics.map(r=>[r.id, r.pct]));
+      list = list.filter(f => matchMap.has(f.id)).sort((a,b)=> matchMap.get(b.id) - matchMap.get(a.id));
+    }
     return `
     <div class="ticket">
       <div class="ticket-stub">
@@ -465,13 +471,14 @@
       <div class="ticket-perf"></div>
       <div class="ticket-body">
       <div class="section-note">كل صف يمثل كود قماش ولون معيّن، والمتبقي يُحسب تلقائيًا عند الإنتاج.</div>
-      ${state.fabrics.length>0 ? searchRowHtml('ابحث بالكود أو اللون...') : ''}
+      ${state.fabrics.length>0 ? searchRowHtml('ابحث بالكود أو اللون...') + imageMatchControlsHtml('fabrics') : ''}
       ${state.fabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش مسجل بعد. أضف أول رصيد من الزر أعلاه.') :
-        list.length===0 ? emptyHtml('🔍','لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الكود</th><th>اللون</th><th>الإجمالي</th><th>المستخدم</th><th>المتبقي</th><th></th></tr></thead><tbody>
-      ${list.map(f=>{
+        list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
+      <table><thead><tr><th></th><th>الكود</th><th>اللون</th><th>الإجمالي</th><th>المستخدم</th><th>المتبقي</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      ${list.map((f,idx)=>{
         const rem = fabricRemaining(f);
         const low = rem < LOW_STOCK_METERS;
+        const pct = matchActive ? matchMap.get(f.id) : null;
         return `<tr>
           <td>${thumbHtml(f.image, f.code)}</td>
           <td>${escapeHtml(f.code)}</td>
@@ -479,6 +486,7 @@
           <td class="num">${fmt(f.total)} م</td>
           <td class="num muted">${fmt(f.used)} م</td>
           <td class="num" style="${low?'color:#C1442E':''}">${fmt(rem)} م ${low?'<span class="badge low">منخفض</span>':''}</td>
+          ${matchActive ? `<td><span class="badge match${idx===0?' best':''}">${pct}%</span></td>` : ''}
           <td class="row-actions">
             <button class="btn ghost sm" data-action="editFabric" data-id="${f.id}">تعديل</button>
             <button class="btn red sm icon-only" data-action="deleteFabric" data-id="${f.id}" title="حذف">✕</button>
@@ -491,10 +499,16 @@
   }
 
   function productsHtml(){
-    const list = state.products.filter(p=>{
+    const matchActive = !!imageMatchResults.products;
+    let list = state.products.filter(p=>{
       const f = fabricById(p.fabricId);
       return matches(p.name) || matches(p.cut) || (f && (matches(f.code) || matches(f.color)));
     });
+    let matchMap = null;
+    if(matchActive){
+      matchMap = new Map(imageMatchResults.products.map(r=>[r.id, r.pct]));
+      list = list.filter(p => matchMap.has(p.id)).sort((a,b)=> matchMap.get(b.id) - matchMap.get(a.id));
+    }
     return `
     <div class="ticket">
       <div class="ticket-stub">
@@ -507,12 +521,13 @@
       <div class="ticket-perf"></div>
       <div class="ticket-body">
       <div class="section-note">كل منتج له قصة وشكل، وكود قماش ولون مرتبطين به.</div>
-      ${state.products.length>0 ? searchRowHtml('ابحث بالاسم أو القصة أو القماش...') : ''}
+      ${state.products.length>0 ? searchRowHtml('ابحث بالاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
-        list.length===0 ? emptyHtml('🔍','لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الاسم</th><th>القصة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th><th></th></tr></thead><tbody>
-      ${list.map(p=>{
+        list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
+      <table><thead><tr><th></th><th>الاسم</th><th>القصة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      ${list.map((p,idx)=>{
         const f = fabricById(p.fabricId);
+        const pct = matchActive ? matchMap.get(p.id) : null;
         return `<tr>
           <td>${thumbHtml(p.image, p.name)}</td>
           <td>${escapeHtml(p.name)}</td>
@@ -520,6 +535,7 @@
           <td>${f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">—</span>'}</td>
           <td class="num">${fmt(p.metersPerPiece)}</td>
           <td class="num">${p.price ? fmt(p.price) : '<span class="muted">—</span>'}</td>
+          ${matchActive ? `<td><span class="badge match${idx===0?' best':''}">${pct}%</span></td>` : ''}
           <td class="row-actions">
             <button class="btn ghost sm" data-action="editProduct" data-id="${p.id}">تعديل</button>
             <button class="btn red sm icon-only" data-action="deleteProduct" data-id="${p.id}" title="حذف">✕</button>
@@ -987,6 +1003,56 @@
         if(!val){ showToast('أدخل رابط صورة أولاً'); return; }
         setImageFieldValue(key, val);
         if(input) input.value = '';
+      });
+    });
+
+    // "search by photo" (reverse image match) controls
+    app.querySelectorAll('[data-match-toggle]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const ctx = btn.getAttribute('data-match-toggle');
+        imageMatchPanelOpen[ctx] = !imageMatchPanelOpen[ctx];
+        render();
+      });
+    });
+    app.querySelectorAll('[data-match-upload]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const ctx = inp.getAttribute('data-match-upload');
+        const file = inp.files && inp.files[0];
+        if(!file) return;
+        readImageFile(file, dataUrl => {
+          imageMatchQueryImage[ctx] = dataUrl;
+          runImageMatch(ctx);
+        });
+      });
+    });
+    app.querySelectorAll('[data-match-url]').forEach(inp=>{
+      inp.addEventListener('input', ()=>{
+        const ctx = inp.getAttribute('data-match-url');
+        imageMatchQueryImage[ctx] = inp.value.trim();
+      });
+    });
+    app.querySelectorAll('[data-match-go]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const ctx = btn.getAttribute('data-match-go');
+        const urlInput = app.querySelector(`[data-match-url="${ctx}"]`);
+        if(urlInput){
+          const v = urlInput.value.trim();
+          if(v) imageMatchQueryImage[ctx] = v;
+        }
+        if(!imageMatchQueryImage[ctx]){
+          showToast('ارفع صورة أو الصق رابطًا أولًا');
+          return;
+        }
+        runImageMatch(ctx);
+      });
+    });
+    app.querySelectorAll('[data-match-clear]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const ctx = btn.getAttribute('data-match-clear');
+        imageMatchQueryImage[ctx] = null;
+        imageMatchResults[ctx] = null;
+        imageMatchStatusMsg[ctx] = '';
+        render();
       });
     });
 

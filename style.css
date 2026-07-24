@@ -247,6 +247,19 @@
 
   .section-note{ font-size:13px; color: var(--ink-soft); margin: -6px 0 14px; }
 
+  /* ---------- search by photo (reverse image match) ---------- */
+  .image-match{ margin: -4px 0 16px; }
+  .image-match-panel{ display:none; margin-top:10px; background: rgba(0,0,0,.02); border:1px dashed var(--paper-2); border-radius:8px; padding:12px; }
+  .image-match-panel.open{ display:block; }
+  .image-match-row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .image-match-row input[type="text"]{ flex:1 1 180px; min-width:140px; padding:8px 10px; border-radius:7px; border:1px solid var(--paper-2); background:#fff; font-size:13px; color:var(--ink); }
+  .image-match-row input[type="text"]:focus{ border-color: var(--gold); }
+  .image-match-preview{ margin-top:10px; width:84px; height:84px; border-radius:8px; overflow:hidden; border:1px solid var(--paper-2); background:#fff; }
+  .image-match-preview img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .image-match-status{ margin-top:8px; font-size:13px; color:var(--ink-soft); }
+  .badge.match{ background: rgba(47,111,107,.14); color: var(--teal-deep); }
+  .badge.match.best{ background: rgba(217,164,65,.22); color: var(--gold-deep); }
+
   .order-item-row{ display:grid; grid-template-columns: 1.6fr .8fr .8fr .8fr auto; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--paper-2); }
   .order-item-row:last-child{ border-bottom:none; }
   .order-item-row .mini-label{ font-size:11px; color:var(--ink-soft); display:block; margin-bottom:3px; }
