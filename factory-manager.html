@@ -289,9 +289,9 @@
 
   async function load(){
     try{
-      const res = await window.storage.get(STORAGE_KEY, false);
-      if(res && res.value){
-        const parsed = JSON.parse(res.value);
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){
+        const parsed = JSON.parse(raw);
         state = Object.assign(state, parsed);
       }
     }catch(e){
@@ -302,7 +302,7 @@
 
   async function save(){
     try{
-      await window.storage.set(STORAGE_KEY, JSON.stringify(state), false);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }catch(e){
       showToast("تعذر حفظ البيانات، حاول مرة أخرى");
     }
