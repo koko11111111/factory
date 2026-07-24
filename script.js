@@ -19,6 +19,12 @@
   let confirmTarget = null; // {message, onConfirm}
   let searchQuery = "";
 
+  // ---------- "search by photo" (reverse match against saved fabric/product images) ----------
+  let imageMatchPanelOpen = { fabrics:false, products:false };
+  let imageMatchQueryImage = { fabrics:null, products:null };   // dataURL or URL currently loaded as the query photo
+  let imageMatchResults = { fabrics:null, products:null };       // null = inactive; else [{id, pct}] sorted best-first
+  let imageMatchStatusMsg = { fabrics:'', products:'' };
+
   const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
 
   function todayLabel(){
@@ -812,6 +818,103 @@
       resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">تعذر البحث عن صور الآن. تحقق من الاتصال بالإنترنت، أو أدخل رابط صورة يدويًا أعلاه.</div>`;
       bindImageSearchBox(key);
     });
+  }
+
+  // ---------- reverse image match (perceptual hash, fully client-side) ----------
+  function computeImageHash(src){
+    return new Promise((resolve)=>{
+      if(!src){ resolve(null); return; }
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try{
+          const w = 9, h = 8;
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const data = ctx.getImageData(0, 0, w, h).data; // throws if canvas is CORS-tainted
+          const gray = [];
+          for(let i=0;i<w*h;i++){
+            const r=data[i*4], g=data[i*4+1], b=data[i*4+2];
+            gray.push(0.299*r + 0.587*g + 0.114*b);
+          }
+          let bits = '';
+          for(let row=0; row<h; row++){
+            for(let col=0; col<w-1; col++){
+              bits += (gray[row*w+col] > gray[row*w+col+1]) ? '1' : '0';
+            }
+          }
+          resolve(bits); // 64-bit difference hash
+        }catch(e){
+          resolve(null); // CORS-tainted canvas or decode failure — can't compare this one
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }
+
+  function hammingDistance(a, b){
+    if(!a || !b || a.length !== b.length) return Infinity;
+    let d = 0;
+    for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++;
+    return d;
+  }
+
+  async function runImageMatch(context){
+    const items = context==='fabrics' ? state.fabrics : state.products;
+    const withImage = items.filter(it=>it.image);
+    if(withImage.length===0){
+      imageMatchStatusMsg[context] = 'لا توجد عناصر لديها صور بعد للمقارنة.';
+      render();
+      return;
+    }
+    imageMatchStatusMsg[context] = '🔎 جارٍ تحليل الصورة...';
+    render();
+    const queryHash = await computeImageHash(imageMatchQueryImage[context]);
+    if(!queryHash){
+      imageMatchStatusMsg[context] = 'تعذر تحليل هذه الصورة. جرّب رفعها من جهازك بدلًا من رابط.';
+      render();
+      return;
+    }
+    imageMatchStatusMsg[context] = `🔎 جارٍ مقارنة ${withImage.length} عنصر...`;
+    render();
+    const results = [];
+    let skipped = 0;
+    for(const it of withImage){
+      const h = await computeImageHash(it.image);
+      if(!h){ skipped++; continue; }
+      const dist = hammingDistance(queryHash, h);
+      results.push({ id: it.id, pct: Math.max(0, Math.round((64-dist)/64*100)) });
+    }
+    results.sort((a,b)=> b.pct - a.pct);
+    imageMatchResults[context] = results;
+    imageMatchPanelOpen[context] = true;
+    imageMatchStatusMsg[context] = results.length
+      ? `أقرب تطابق: ${results[0].pct}%` + (skipped ? ` · تعذرت مقارنة ${skipped} عنصر` : '')
+      : 'تعذرت مقارنة أي صورة (قد تكون الروابط محمية من النسخ).';
+    render();
+  }
+
+  function imageMatchControlsHtml(context){
+    const open = imageMatchPanelOpen[context];
+    const qImg = imageMatchQueryImage[context];
+    const active = !!imageMatchResults[context];
+    const isUrlLike = qImg && /^https?:\/\//.test(qImg);
+    return `<div class="image-match">
+      <button type="button" class="btn ghost sm" data-match-toggle="${context}">🖼️ ${active ? 'نتائج المطابقة بالصورة' : 'ابحث بالصورة'}</button>
+      <div class="image-match-panel ${open?'open':''}">
+        <div class="image-match-row">
+          <label class="btn ghost sm image-upload-btn">📁 ارفع صورة<input type="file" accept="image/*" class="visually-hidden" data-match-upload="${context}"></label>
+          <input type="text" placeholder="أو الصق رابط صورة" data-match-url="${context}" value="${isUrlLike ? escapeHtml(qImg) : ''}">
+          <button type="button" class="btn gold sm" data-match-go="${context}">قارن</button>
+          ${active ? `<button type="button" class="btn ghost sm" data-match-clear="${context}">إلغاء</button>` : ''}
+        </div>
+        ${qImg ? `<div class="image-match-preview"><img src="${escapeHtml(qImg)}" alt=""></div>` : ''}
+        ${imageMatchStatusMsg[context] ? `<div class="image-match-status">${escapeHtml(imageMatchStatusMsg[context])}</div>` : ''}
+      </div>
+    </div>`;
   }
 
   // ---------- events ----------
