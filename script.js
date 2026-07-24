@@ -1,0 +1,910 @@
+(function(){
+  "use strict";
+
+  const LOW_STOCK_METERS = 10;
+  const STORAGE_KEY = "factory-data";
+
+  let state = {
+    factoryName: "مصنع الأقمشة",
+    fabrics: [],   // {id, code, color, total, used, image}
+    products: [],  // {id, name, cut, fabricId, metersPerPiece, price, image}
+    orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
+  };
+
+  const IMAGE_SEARCH_ENDPOINT = "https://api.openverse.org/v1/images/";
+
+  let view = "dashboard"; // dashboard | fabrics | products | orders | orderDetail
+  let activeOrderId = null;
+  let modal = null; // {title, fields, submitLabel, onSubmit}
+  let confirmTarget = null; // {message, onConfirm}
+  let searchQuery = "";
+
+  const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
+
+  function todayLabel(){
+    try{
+      return new Date().toLocaleDateString('ar-EG', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+    }catch(e){ return ''; }
+  }
+
+  function fmt(n){
+    const v = Math.round((Number(n)||0) * 100) / 100;
+    return v.toLocaleString('en-US');
+  }
+
+  async function load(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){
+        const parsed = JSON.parse(raw);
+        state = Object.assign(state, parsed);
+      }
+    }catch(e){
+      // no existing data yet — start fresh
+    }
+    render();
+  }
+
+  async function save(){
+    try{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }catch(e){
+      showToast("تعذر حفظ البيانات، حاول مرة أخرى");
+    }
+  }
+
+  let toastTimer = null;
+  function showToast(msg){
+    let el = document.getElementById("toast");
+    if(!el){
+      el = document.createElement("div");
+      el.id = "toast";
+      el.className = "toast";
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    requestAnimationFrame(()=> el.classList.add("show"));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=> el.classList.remove("show"), 2200);
+  }
+
+  // ---------- derived helpers ----------
+  function fabricRemaining(f){ return (Number(f.total)||0) - (Number(f.used)||0); }
+  function fabricById(id){ return state.fabrics.find(f=>f.id===id); }
+  function productById(id){ return state.products.find(p=>p.id===id); }
+  function orderById(id){ return state.orders.find(o=>o.id===id); }
+
+  function totalRemainingMeters(){
+    return state.fabrics.reduce((s,f)=> s + fabricRemaining(f), 0);
+  }
+  function totalSoldPieces(){
+    let s = 0;
+    state.orders.forEach(o => o.items.forEach(it => s += Number(it.sold)||0));
+    return s;
+  }
+  function totalRevenue(){
+    let s = 0;
+    state.orders.forEach(o => o.items.forEach(it => {
+      const p = productById(it.productId);
+      if(p && p.price) s += (Number(it.sold)||0) * Number(p.price);
+    }));
+    return s;
+  }
+  function orderProgress(order){
+    let ordered=0, produced=0, sold=0;
+    order.items.forEach(it=>{ ordered+=Number(it.ordered)||0; produced+=Number(it.produced)||0; sold+=Number(it.sold)||0; });
+    const pct = ordered ? Math.min(100, Math.round(produced/ordered*100)) : 0;
+    const soldPct = ordered ? Math.min(100, Math.round(sold/ordered*100)) : 0;
+    const complete = ordered>0 && produced>=ordered;
+    return {ordered, produced, sold, pct, soldPct, complete};
+  }
+  function activeOrders(){
+    return state.orders.filter(o => !orderProgress(o).complete);
+  }
+
+  // ---------- mutations ----------
+  function addFabric(vals){
+    const existing = state.fabrics.find(f => f.code.trim()===vals.code.trim() && f.color.trim()===vals.color.trim());
+    if(existing){
+      existing.total = (Number(existing.total)||0) + Number(vals.qty);
+      if(vals.image) existing.image = vals.image;
+      showToast("تمت إضافة الكمية إلى القماش الموجود");
+    } else {
+      state.fabrics.push({ id: uid(), code: vals.code.trim(), color: vals.color.trim(), total: Number(vals.qty)||0, used: 0, image: vals.image || null });
+      showToast("تمت إضافة القماش");
+    }
+    save(); render();
+  }
+  function editFabric(id, vals){
+    const f = fabricById(id);
+    if(!f) return;
+    f.code = vals.code.trim(); f.color = vals.color.trim(); f.total = Number(vals.qty)||0;
+    f.image = vals.image || null;
+    save(); showToast("تم تعديل القماش"); render();
+  }
+  function deleteFabric(id){
+    const used = state.products.some(p=>p.fabricId===id);
+    if(used){ showToast("لا يمكن حذف قماش مستخدم في منتج"); return; }
+    state.fabrics = state.fabrics.filter(f=>f.id!==id);
+    save(); showToast("تم حذف القماش"); render();
+  }
+
+  function addProduct(vals){
+    state.products.push({
+      id: uid(), name: vals.name.trim(), cut: vals.cut.trim(),
+      fabricId: vals.fabricId, metersPerPiece: Number(vals.meters)||0,
+      price: vals.price ? Number(vals.price) : null,
+      image: vals.image || null
+    });
+    save(); showToast("تمت إضافة المنتج"); render();
+  }
+  function editProduct(id, vals){
+    const p = productById(id);
+    if(!p) return;
+    p.name = vals.name.trim(); p.cut = vals.cut.trim(); p.fabricId = vals.fabricId;
+    p.metersPerPiece = Number(vals.meters)||0; p.price = vals.price ? Number(vals.price) : null;
+    p.image = vals.image || null;
+    save(); showToast("تم تعديل المنتج"); render();
+  }
+  function deleteProduct(id){
+    const used = state.orders.some(o=>o.items.some(it=>it.productId===id));
+    if(used){ showToast("لا يمكن حذف منتج مستخدم في طلبية"); return; }
+    state.products = state.products.filter(p=>p.id!==id);
+    save(); showToast("تم حذف المنتج"); render();
+  }
+
+  function addOrder(vals){
+    const o = { id: uid(), name: vals.name.trim(), date: vals.date, items: [] };
+    state.orders.push(o);
+    save(); render();
+    activeOrderId = o.id; view = "orderDetail"; render();
+  }
+  function deleteOrder(id){
+    state.orders = state.orders.filter(o=>o.id!==id);
+    if(activeOrderId===id){ activeOrderId=null; view="orders"; }
+    save(); showToast("تم حذف الطلبية"); render();
+  }
+  function addOrderItem(orderId, vals){
+    const o = orderById(orderId);
+    if(!o) return;
+    o.items.push({ id: uid(), productId: vals.productId, ordered: Number(vals.ordered)||0, produced:0, sold:0 });
+    save(); render();
+  }
+  function deleteOrderItem(orderId, itemId){
+    const o = orderById(orderId);
+    if(!o) return;
+    o.items = o.items.filter(it=>it.id!==itemId);
+    save(); render();
+  }
+  function updateOrderItemQty(orderId, itemId, field, value){
+    const o = orderById(orderId);
+    if(!o) return;
+    const it = o.items.find(i=>i.id===itemId);
+    if(!it) return;
+    const num = Math.max(0, Number(value)||0);
+
+    if(field==="produced"){
+      const delta = num - (Number(it.produced)||0);
+      if(delta !== 0){
+        const p = productById(it.productId);
+        if(p && p.fabricId){
+          const f = fabricById(p.fabricId);
+          if(f){
+            const metersDelta = delta * (Number(p.metersPerPiece)||0);
+            if(delta > 0 && metersDelta > fabricRemaining(f)){
+              showToast("تنبيه: القماش المتبقي أقل من الكمية المطلوبة للإنتاج");
+            }
+            f.used = (Number(f.used)||0) + metersDelta;
+            if(f.used < 0) f.used = 0;
+          }
+        }
+      }
+      it.produced = num;
+    } else if(field==="sold"){
+      it.sold = num;
+    } else if(field==="ordered"){
+      it.ordered = num;
+    }
+    save(); render();
+  }
+
+  function setFactoryName(name){
+    state.factoryName = name.trim() || "مصنع الأقمشة";
+    save(); render();
+  }
+
+  // ---------- modal helpers ----------
+  function openModal(cfg){ modal = cfg; render(); setTimeout(()=>{ const f=document.querySelector('.modal input,.modal select'); if(f) f.focus(); }, 30); }
+  function closeModal(){ modal = null; render(); }
+
+  function fabricSearchOptions(){
+    return state.fabrics.map(f => ({ id: f.id, label: f.code + " — " + f.color + " (" + fmt(fabricRemaining(f)) + " م متبقي)" }));
+  }
+  function productSearchOptions(){
+    return state.products.map(p => ({ id: p.id, label: p.name + " — " + p.cut }));
+  }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function matches(text){
+    if(!searchQuery.trim()) return true;
+    return String(text||'').toLowerCase().includes(searchQuery.trim().toLowerCase());
+  }
+  function serialFor(prefix, seed){
+    const s = String(seed).replace(/[^a-zA-Z0-9]/g,'').toUpperCase();
+    return prefix + '-' + (s ? s.slice(-6) : '000000');
+  }
+  function searchRowHtml(placeholder){
+    return `<div class="search-row">
+      <input type="text" id="searchInput" value="${escapeHtml(searchQuery)}" placeholder="${escapeHtml(placeholder)}">
+      <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </div>`;
+  }
+  function thumbHtml(url, alt){
+    if(url) return `<span class="thumb"><img src="${escapeHtml(url)}" alt="${escapeHtml(alt||'')}" loading="lazy"></span>`;
+    return `<span class="thumb thumb-empty">🧵</span>`;
+  }
+
+  // ---------- open-modal actions ----------
+  function modalAddFabric(){
+    openModal({
+      title: "إضافة قماش جديد",
+      submitLabel: "إضافة",
+      fields: [
+        {key:'code', label:'كود القماش', type:'text', required:true},
+        {key:'color', label:'اللون', type:'text', required:true},
+        {key:'qty', label:'الكمية (متر)', type:'number', required:true},
+        {key:'image', label:'صورة القماش', type:'image', value:'', queryFields:['code','color']}
+      ],
+      onSubmit: vals => addFabric(vals)
+    });
+  }
+  function modalEditFabric(f){
+    openModal({
+      title: "تعديل القماش",
+      submitLabel: "حفظ",
+      fields: [
+        {key:'code', label:'كود القماش', type:'text', value:f.code, required:true},
+        {key:'color', label:'اللون', type:'text', value:f.color, required:true},
+        {key:'qty', label:'إجمالي الكمية (متر)', type:'number', value:f.total, required:true},
+        {key:'image', label:'صورة القماش', type:'image', value:f.image||'', queryFields:['code','color']}
+      ],
+      onSubmit: vals => editFabric(f.id, vals)
+    });
+  }
+  function modalAddProduct(){
+    if(state.fabrics.length===0){ showToast("أضف قماشًا أولاً من تبويب الأقمشة"); return; }
+    openModal({
+      title: "إضافة منتج جديد",
+      submitLabel: "إضافة",
+      fields: [
+        {key:'name', label:'اسم المنتج', type:'text', required:true},
+        {key:'cut', label:'القصة / الشكل', type:'text', required:true},
+        {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), required:true, emptyMsg:'لا يوجد قماش مسجل بعد'},
+        {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:true},
+        {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
+        {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut']}
+      ],
+      onSubmit: vals => addProduct(vals)
+    });
+  }
+  function modalEditProduct(p){
+    openModal({
+      title: "تعديل المنتج",
+      submitLabel: "حفظ",
+      fields: [
+        {key:'name', label:'اسم المنتج', type:'text', value:p.name, required:true},
+        {key:'cut', label:'القصة / الشكل', type:'text', value:p.cut, required:true},
+        {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:true, emptyMsg:'لا يوجد قماش مسجل بعد'},
+        {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:true},
+        {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
+        {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut']}
+      ],
+      onSubmit: vals => editProduct(p.id, vals)
+    });
+  }
+  function modalAddOrder(){
+    const today = new Date().toISOString().slice(0,10);
+    openModal({
+      title: "طلبية جديدة",
+      submitLabel: "إنشاء",
+      fields: [
+        {key:'name', label:'اسم الطلبية / العميل', type:'text', required:true},
+        {key:'date', label:'التاريخ', type:'date', value:today, required:true}
+      ],
+      onSubmit: vals => addOrder(vals)
+    });
+  }
+  function modalAddOrderItem(orderId){
+    if(state.products.length===0){ showToast("أضف منتجًا أولاً من تبويب المنتجات"); return; }
+    openModal({
+      title: "إضافة صنف للطلبية",
+      submitLabel: "إضافة",
+      fields: [
+        {key:'productId', label:'المنتج / القصة (اكتب للبحث)', type:'searchselect', options: productSearchOptions(), required:true, emptyMsg:'لا يوجد منتجات بعد'},
+        {key:'ordered', label:'الكمية المطلوبة', type:'number', required:true}
+      ],
+      onSubmit: vals => addOrderItem(orderId, vals)
+    });
+  }
+
+  function askConfirm(message, onConfirm){
+    confirmTarget = {message, onConfirm};
+    render();
+  }
+
+  // ---------- rendering ----------
+  function render(){
+    const app = document.getElementById('app');
+    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '');
+    bindEvents();
+  }
+
+  function renderPreserveFocus(){
+    const active = document.activeElement;
+    const id = active && active.id;
+    const start = (active && typeof active.selectionStart === 'number') ? active.selectionStart : null;
+    const end = (active && typeof active.selectionEnd === 'number') ? active.selectionEnd : null;
+    render();
+    if(id){
+      const el = document.getElementById(id);
+      if(el){
+        el.focus();
+        if(start!==null && el.setSelectionRange){ try{ el.setSelectionRange(start, end); }catch(e){} }
+      }
+    }
+  }
+
+  function topbarHtml(){
+    const low = state.fabrics.filter(f => fabricRemaining(f) < LOW_STOCK_METERS && fabricRemaining(f) >= 0).length;
+    return `
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 9L12 4L20 9V19H15V13H9V19H4V9Z" stroke="#241F16" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        </div>
+        <div>
+          <input class="brand-name" id="factoryNameInput" value="${escapeHtml(state.factoryName)}" />
+          <div class="brand-tag">${escapeHtml(todayLabel())}</div>
+        </div>
+      </div>
+      <div class="quickstats">
+        <div class="qstat"><b>${fmt(totalRemainingMeters())}</b><span>متر متبقي</span></div>
+        <div class="qstat"><b>${fmt(totalSoldPieces())}</b><span>قطعة مباعة</span></div>
+        <div class="qstat"><b>${activeOrders().length}</b><span>طلبية نشطة</span></div>
+        <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
+      </div>
+    </div>`;
+  }
+
+  function tabsHtml(){
+    const tabs = [
+      {id:'dashboard', label:'الرئيسية'},
+      {id:'fabrics', label:'الأقمشة'},
+      {id:'products', label:'المنتجات'},
+      {id:'orders', label:'الطلبات'}
+    ];
+    const cur = (view==='orderDetail') ? 'orders' : view;
+    return `<div class="tabs">` + tabs.map(t=>
+      `<button class="tab ${cur===t.id?'active':''}" data-nav="${t.id}">${t.label}</button>`
+    ).join('') + `</div>`;
+  }
+
+  function viewHtml(){
+    if(view==='dashboard') return dashboardHtml();
+    if(view==='fabrics') return fabricsHtml();
+    if(view==='products') return productsHtml();
+    if(view==='orders') return ordersHtml();
+    if(view==='orderDetail') return orderDetailHtml();
+    return '';
+  }
+
+  function dashboardHtml(){
+    const lowFabrics = state.fabrics.filter(f=>fabricRemaining(f) < LOW_STOCK_METERS);
+    const act = activeOrders();
+    const rev = totalRevenue();
+    return `
+    <div class="ticket">
+      <div class="ticket-stub"><h2 class="ticket-title">القماش المنخفض</h2></div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+      ${lowFabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش منخفض المخزون حاليًا') : `
+      <table><thead><tr><th>الكود</th><th>اللون</th><th>المتبقي</th></tr></thead><tbody>
+      ${lowFabrics.map(f=>`<tr><td>${escapeHtml(f.code)}</td><td><span class="swatch" style="background:${colorSwatch(f.color)}"></span>${escapeHtml(f.color)}</td><td class="num" style="color:#C1442E">${fmt(fabricRemaining(f))} م</td></tr>`).join('')}
+      </tbody></table>`}
+      </div>
+    </div>
+
+    <div class="ticket">
+      <div class="ticket-stub">
+        <h2 class="ticket-title">الطلبات النشطة</h2>
+        <button class="btn gold sm" data-nav="orders">عرض الكل</button>
+      </div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+      ${act.length===0 ? emptyHtml('📦','لا توجد طلبات نشطة الآن') : act.slice(0,4).map(o=>{
+        const pr = orderProgress(o);
+        return `<div style="margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px;">
+            <b>${escapeHtml(o.name)}</b><span class="muted mono">${pr.produced}/${pr.ordered}</span>
+          </div>
+          <div class="progress"><div style="width:${pr.pct}%"></div></div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>
+
+    ${rev>0 ? `<div class="ticket">
+      <div class="ticket-stub"><h2 class="ticket-title">إجمالي المبيعات</h2></div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+        <div style="font-size:26px;" class="mono">${fmt(rev)}</div>
+        <div class="muted" style="font-size:13px;">بناءً على أسعار المنتجات المسجّلة</div>
+      </div>
+    </div>` : ''}
+    `;
+  }
+
+  function fabricsHtml(){
+    const list = state.fabrics.filter(f => matches(f.code) || matches(f.color));
+    return `
+    <div class="ticket">
+      <div class="ticket-stub">
+        <div>
+          <h2 class="ticket-title">الأقمشة</h2>
+          <div class="ticket-meta"><span class="ticket-serial">${serialFor('STK', state.fabrics.length)}</span><span class="barcode"></span></div>
+        </div>
+        <button class="btn gold" data-action="addFabric">+ إضافة قماش</button>
+      </div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+      <div class="section-note">كل صف يمثل كود قماش ولون معيّن، والمتبقي يُحسب تلقائيًا عند الإنتاج.</div>
+      ${state.fabrics.length>0 ? searchRowHtml('ابحث بالكود أو اللون...') : ''}
+      ${state.fabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش مسجل بعد. أضف أول رصيد من الزر أعلاه.') :
+        list.length===0 ? emptyHtml('🔍','لا توجد نتائج مطابقة للبحث') : `
+      <table><thead><tr><th></th><th>الكود</th><th>اللون</th><th>الإجمالي</th><th>المستخدم</th><th>المتبقي</th><th></th></tr></thead><tbody>
+      ${list.map(f=>{
+        const rem = fabricRemaining(f);
+        const low = rem < LOW_STOCK_METERS;
+        return `<tr>
+          <td>${thumbHtml(f.image, f.code)}</td>
+          <td>${escapeHtml(f.code)}</td>
+          <td><span class="swatch" style="background:${colorSwatch(f.color)}"></span>${escapeHtml(f.color)}</td>
+          <td class="num">${fmt(f.total)} م</td>
+          <td class="num muted">${fmt(f.used)} م</td>
+          <td class="num" style="${low?'color:#C1442E':''}">${fmt(rem)} م ${low?'<span class="badge low">منخفض</span>':''}</td>
+          <td class="row-actions">
+            <button class="btn ghost sm" data-action="editFabric" data-id="${f.id}">تعديل</button>
+            <button class="btn red sm icon-only" data-action="deleteFabric" data-id="${f.id}" title="حذف">✕</button>
+          </td>
+        </tr>`;
+      }).join('')}
+      </tbody></table>`}
+      </div>
+    </div>`;
+  }
+
+  function productsHtml(){
+    const list = state.products.filter(p=>{
+      const f = fabricById(p.fabricId);
+      return matches(p.name) || matches(p.cut) || (f && (matches(f.code) || matches(f.color)));
+    });
+    return `
+    <div class="ticket">
+      <div class="ticket-stub">
+        <div>
+          <h2 class="ticket-title">المنتجات</h2>
+          <div class="ticket-meta"><span class="ticket-serial">${serialFor('PRD', state.products.length)}</span><span class="barcode"></span></div>
+        </div>
+        <button class="btn gold" data-action="addProduct">+ إضافة منتج</button>
+      </div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+      <div class="section-note">كل منتج له قصة وشكل، وكود قماش ولون مرتبطين به.</div>
+      ${state.products.length>0 ? searchRowHtml('ابحث بالاسم أو القصة أو القماش...') : ''}
+      ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
+        list.length===0 ? emptyHtml('🔍','لا توجد نتائج مطابقة للبحث') : `
+      <table><thead><tr><th></th><th>الاسم</th><th>القصة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th><th></th></tr></thead><tbody>
+      ${list.map(p=>{
+        const f = fabricById(p.fabricId);
+        return `<tr>
+          <td>${thumbHtml(p.image, p.name)}</td>
+          <td>${escapeHtml(p.name)}</td>
+          <td>${escapeHtml(p.cut)}</td>
+          <td>${f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">—</span>'}</td>
+          <td class="num">${fmt(p.metersPerPiece)}</td>
+          <td class="num">${p.price ? fmt(p.price) : '<span class="muted">—</span>'}</td>
+          <td class="row-actions">
+            <button class="btn ghost sm" data-action="editProduct" data-id="${p.id}">تعديل</button>
+            <button class="btn red sm icon-only" data-action="deleteProduct" data-id="${p.id}" title="حذف">✕</button>
+          </td>
+        </tr>`;
+      }).join('')}
+      </tbody></table>`}
+      </div>
+    </div>`;
+  }
+
+  function ordersHtml(){
+    const list = state.orders.filter(o => matches(o.name));
+    return `
+    <div class="toolbar">
+      <h2 class="ticket-title">الطلبات</h2>
+      <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
+      <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
+    </div>
+    ${state.orders.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('📦','لا توجد طلبات بعد. أنشئ أول طلبية من الزر أعلاه.')}</div></div>` :
+      list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد نتائج مطابقة للبحث')}</div></div>` :
+      list.slice().reverse().map(o=>{
+        const pr = orderProgress(o);
+        return `<div class="ticket mini order-card" data-open-order="${o.id}">
+          <div class="ticket-stub">
+            <div>
+              <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span></h2>
+              <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span><span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')} · ${o.items.length} صنف</span></div>
+            </div>
+            <button class="btn red sm icon-only" data-action="deleteOrder" data-id="${o.id}" title="حذف الطلبية" onclick="event.stopPropagation()">✕</button>
+          </div>
+          <div class="ticket-perf"></div>
+          <div class="ticket-body">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;" class="muted"><span>الإنتاج</span><span class="num">${pr.produced}/${pr.ordered}</span></div>
+            <div class="progress"><div style="width:${pr.pct}%"></div></div>
+          </div>
+        </div>`;
+      }).join('')}
+    `;
+  }
+
+  function orderDetailHtml(){
+    const o = orderById(activeOrderId);
+    if(!o){ view='orders'; return ordersHtml(); }
+    const pr = orderProgress(o);
+    return `
+    <button class="back-link" data-nav="orders">→ رجوع للطلبات</button>
+    <div class="ticket">
+      <div class="ticket-stub">
+        <div>
+          <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span></h2>
+          <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span><span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')}</span></div>
+        </div>
+        <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
+      </div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+
+      <div class="field-row" style="margin-bottom:18px;">
+        <div>
+          <div class="muted" style="font-size:12px;margin-bottom:4px;">نسبة الإنتاج (${pr.produced}/${pr.ordered})</div>
+          <div class="progress"><div style="width:${pr.pct}%"></div></div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:12px;margin-bottom:4px;">نسبة المبيعات (${pr.sold}/${pr.ordered})</div>
+          <div class="progress sold"><div style="width:${pr.soldPct}%"></div></div>
+        </div>
+      </div>
+
+      ${o.items.length===0 ? emptyHtml('📋','لا توجد أصناف في هذه الطلبية بعد.') : o.items.map(it=>{
+        const p = productById(it.productId);
+        return `<div class="order-item-row">
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${thumbHtml(p&&p.image, p&&p.name)}
+            <b>${p?escapeHtml(p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>'}</b>
+          </div>
+          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
+          <div class="del-cell"><button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button></div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>`;
+  }
+
+  function emptyHtml(icon, msg){
+    return `<div class="empty"><div class="big">${icon}</div>${escapeHtml(msg)}</div>`;
+  }
+
+  function colorSwatch(name){
+    const map = {'أبيض':'#fff','اسود':'#111','أسود':'#111','احمر':'#c0392b','أحمر':'#c0392b','ازرق':'#2980b9','أزرق':'#2980b9','اخضر':'#27ae60','أخضر':'#27ae60','اصفر':'#f1c40f','أصفر':'#f1c40f','بني':'#7a4a2b','رمادي':'#95a5a6','بيج':'#e6d3b3','كحلي':'#1b2a4a','وردي':'#e6a4c4','بنفسجي':'#8e44ad'};
+    return map[name.trim()] || '#c9bc97';
+  }
+
+  function fieldHtml(f){
+    if(f.type==='select'){
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><select name="${f.key}" ${f.required?'required':''}>${f.optionsHtml}</select></div>`;
+    }
+    if(f.type==='searchselect'){
+      return searchSelectFieldHtml(f);
+    }
+    if(f.type==='image'){
+      return imageFieldHtml(f);
+    }
+    return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="${f.type}" name="${f.key}" ${f.step?'step="'+f.step+'"':''} value="${f.value!==undefined?escapeHtml(f.value):''}" ${f.required?'required':''}></div>`;
+  }
+
+  function searchSelectFieldHtml(f){
+    const options = f.options || [];
+    if(options.length===0){
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><div class="muted" style="font-size:13px;">${escapeHtml(f.emptyMsg||'لا توجد خيارات بعد')}</div></div>`;
+    }
+    const selected = options.find(o => o.id === f.value);
+    const listId = 'dl_' + f.key;
+    return `<div class="field">
+      <label>${escapeHtml(f.label)}</label>
+      <input type="text" list="${listId}" data-searchselect="${f.key}" value="${escapeHtml(selected?selected.label:'')}" placeholder="اكتب للبحث..." autocomplete="off">
+      <datalist id="${listId}">
+        ${options.map(o => `<option data-id="${escapeHtml(o.id)}" value="${escapeHtml(o.label)}"></option>`).join('')}
+      </datalist>
+      <input type="hidden" name="${f.key}" value="${escapeHtml(f.value||'')}">
+    </div>`;
+  }
+
+  function imageFieldHtml(f){
+    const url = f.value || '';
+    const queryFieldsAttr = (f.queryFields||[]).join(',');
+    return `<div class="field field-image">
+      <label>${escapeHtml(f.label)}</label>
+      <div class="image-field">
+        <div class="image-preview" id="imgPreview_${f.key}">
+          ${url ? `<img src="${escapeHtml(url)}" alt="">` : `<div class="image-placeholder">لا توجد صورة</div>`}
+        </div>
+        <input type="hidden" name="${f.key}" id="imgInput_${f.key}" value="${escapeHtml(url)}">
+        <div class="image-actions">
+          <label class="btn ghost sm image-upload-btn">📁 رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
+          <button type="button" class="btn ghost sm" data-image-search="${f.key}" data-query-fields="${escapeHtml(queryFieldsAttr)}">🔍 بحث عن صورة</button>
+          <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">✕ إزالة</button>
+        </div>
+        <div class="image-url-row">
+          <input type="text" placeholder="أو الصق رابط صورة مباشر (URL)" data-image-url-input="${f.key}">
+          <button type="button" class="btn ghost sm" data-image-url-apply="${f.key}">تطبيق</button>
+        </div>
+        <div class="image-search-results" id="imgResults_${f.key}"></div>
+      </div>
+    </div>`;
+  }
+
+  function modalHtml(cfg){
+    return `<div class="overlay" id="overlayEl">
+      <div class="modal">
+        <button class="modal-close" data-action="closeModal">✕</button>
+        <h3>${escapeHtml(cfg.title)}</h3>
+        <form id="modalForm">
+          ${cfg.fields.map(fieldHtml).join('')}
+          <div class="modal-actions">
+            <button type="submit" class="btn gold">${escapeHtml(cfg.submitLabel)}</button>
+            <button type="button" class="btn ghost" data-action="closeModal">إلغاء</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  }
+
+  function confirmHtml(){
+    return `<div class="overlay">
+      <div class="modal" style="max-width:360px;">
+        <h3>تأكيد</h3>
+        <p style="margin:-6px 0 16px;font-size:14px;">${escapeHtml(confirmTarget.message)}</p>
+        <div class="modal-actions">
+          <button class="btn red" data-action="confirmYes">نعم، متأكد</button>
+          <button class="btn ghost" data-action="confirmNo">إلغاء</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ---------- image field helpers ----------
+  function setImageFieldValue(key, url){
+    const hidden = document.getElementById('imgInput_'+key);
+    if(hidden) hidden.value = url || '';
+    const preview = document.getElementById('imgPreview_'+key);
+    if(preview) preview.innerHTML = url ? `<img src="${escapeHtml(url)}" alt="">` : `<div class="image-placeholder">لا توجد صورة</div>`;
+    const clearBtn = document.querySelector(`[data-image-clear="${key}"]`);
+    if(clearBtn) clearBtn.style.display = url ? '' : 'none';
+  }
+
+  function readImageFile(file, cb){
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 640;
+        let w = img.width, h = img.height;
+        if(w > maxDim || h > maxDim){
+          if(w > h){ h = Math.round(h * maxDim / w); w = maxDim; }
+          else { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        cb(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = () => showToast('تعذر قراءة الصورة');
+      img.src = e.target.result;
+    };
+    reader.onerror = () => showToast('تعذر قراءة الملف');
+    reader.readAsDataURL(file);
+  }
+
+  async function fetchImageSearchResults(query){
+    const url = IMAGE_SEARCH_ENDPOINT + '?format=json&page_size=8&q=' + encodeURIComponent(query);
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('search failed');
+    const data = await res.json();
+    return (data.results||[])
+      .map(r => ({ url: r.url || r.thumbnail, thumb: r.thumbnail || r.url }))
+      .filter(x => x.thumb);
+  }
+
+  function searchBoxHtml(key, q){
+    return `<div class="image-search-box">
+      <input type="text" class="image-search-input" data-search-input-for="${key}" value="${escapeHtml(q||'')}" placeholder="ابحث عن صورة...">
+      <button type="button" class="btn ghost sm" data-search-go="${key}">بحث</button>
+    </div>`;
+  }
+
+  function bindImageSearchBox(key){
+    const goBtn = document.querySelector(`[data-search-go="${key}"]`);
+    const input = document.querySelector(`[data-search-input-for="${key}"]`);
+    if(goBtn) goBtn.addEventListener('click', () => runImageSearch(key, input ? input.value.trim() : ''));
+    if(input){
+      input.addEventListener('keydown', (e) => {
+        if(e.key==='Enter'){ e.preventDefault(); runImageSearch(key, input.value.trim()); }
+      });
+    }
+  }
+
+  function runImageSearch(key, queryOverride){
+    const resultsEl = document.getElementById('imgResults_'+key);
+    if(!resultsEl) return;
+    let query = queryOverride;
+    if(query===undefined){
+      const btn = document.querySelector(`[data-image-search="${key}"]`);
+      const qKeys = btn && btn.getAttribute('data-query-fields') ? btn.getAttribute('data-query-fields').split(',').filter(Boolean) : [];
+      const parts = qKeys.map(k=>{
+        const el = document.querySelector(`#modalForm [name="${k}"]`);
+        return el ? el.value.trim() : '';
+      }).filter(Boolean);
+      query = parts.join(' ');
+    }
+    if(!query){
+      resultsEl.innerHTML = searchBoxHtml(key, '') + `<div class="image-search-hint">اكتب اسمًا أعلاه أو استخدم مربع البحث هنا</div>`;
+      bindImageSearchBox(key);
+      return;
+    }
+    resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">🔎 جارٍ البحث عن "${escapeHtml(query)}"...</div>`;
+    bindImageSearchBox(key);
+    fetchImageSearchResults(query).then(items=>{
+      if(!items || items.length===0){
+        resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">لا توجد نتائج لهذا البحث. جرّب كلمة أخرى أو أدخل رابط صورة يدويًا.</div>`;
+        bindImageSearchBox(key);
+        return;
+      }
+      resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-results-grid">${items.map(it=>
+        `<button type="button" class="image-result" data-pick-image="${key}" data-url="${escapeHtml(it.url)}"><img src="${escapeHtml(it.thumb)}" alt="" loading="lazy"></button>`
+      ).join('')}</div>`;
+      bindImageSearchBox(key);
+      resultsEl.querySelectorAll('[data-pick-image]').forEach(elx=>{
+        elx.addEventListener('click', ()=>{
+          setImageFieldValue(key, elx.getAttribute('data-url'));
+          resultsEl.innerHTML = '';
+        });
+      });
+    }).catch(()=>{
+      resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">تعذر البحث عن صور الآن. تحقق من الاتصال بالإنترنت، أو أدخل رابط صورة يدويًا أعلاه.</div>`;
+      bindImageSearchBox(key);
+    });
+  }
+
+  // ---------- events ----------
+  function bindEvents(){
+    const app = document.getElementById('app');
+
+    const nameInput = document.getElementById('factoryNameInput');
+    if(nameInput){
+      nameInput.addEventListener('change', e => setFactoryName(e.target.value));
+    }
+
+    app.querySelectorAll('[data-nav]').forEach(el=>{
+      el.addEventListener('click', ()=>{ view = el.getAttribute('data-nav'); searchQuery = ''; render(); });
+    });
+
+    app.querySelectorAll('[data-open-order]').forEach(el=>{
+      el.addEventListener('click', ()=>{ activeOrderId = el.getAttribute('data-open-order'); view='orderDetail'; render(); });
+    });
+
+    const searchEl = document.getElementById('searchInput');
+    if(searchEl){
+      searchEl.addEventListener('input', ()=>{ searchQuery = searchEl.value; renderPreserveFocus(); });
+    }
+
+    app.querySelectorAll('[data-oi]').forEach(el=>{
+      el.addEventListener('change', ()=>{
+        updateOrderItemQty(el.getAttribute('data-order'), el.getAttribute('data-item'), el.getAttribute('data-oi'), el.value);
+      });
+    });
+
+    // searchable fabric/product pickers: keep a hidden id input in sync with the typed label
+    app.querySelectorAll('[data-searchselect]').forEach(input=>{
+      const key = input.getAttribute('data-searchselect');
+      const hidden = app.querySelector(`input[type="hidden"][name="${key}"]`);
+      const datalist = document.getElementById('dl_'+key);
+      const sync = () => {
+        const val = input.value.trim();
+        let matchedId = '';
+        if(datalist){
+          const found = Array.from(datalist.querySelectorAll('option')).find(o => o.value === val);
+          if(found) matchedId = found.getAttribute('data-id');
+        }
+        if(hidden) hidden.value = matchedId;
+      };
+      input.addEventListener('input', sync);
+      input.addEventListener('change', sync);
+      sync();
+    });
+
+    // image fields: upload, search, manual URL, clear
+    app.querySelectorAll('[data-upload-for]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const key = inp.getAttribute('data-upload-for');
+        const file = inp.files && inp.files[0];
+        if(!file) return;
+        readImageFile(file, dataUrl => setImageFieldValue(key, dataUrl));
+      });
+    });
+    app.querySelectorAll('[data-image-search]').forEach(btn=>{
+      btn.addEventListener('click', ()=> runImageSearch(btn.getAttribute('data-image-search')));
+    });
+    app.querySelectorAll('[data-image-clear]').forEach(btn=>{
+      btn.addEventListener('click', ()=> setImageFieldValue(btn.getAttribute('data-image-clear'), ''));
+    });
+    app.querySelectorAll('[data-image-url-apply]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const key = btn.getAttribute('data-image-url-apply');
+        const input = app.querySelector(`[data-image-url-input="${key}"]`);
+        const val = input ? input.value.trim() : '';
+        if(!val){ showToast('أدخل رابط صورة أولاً'); return; }
+        setImageFieldValue(key, val);
+        if(input) input.value = '';
+      });
+    });
+
+    app.querySelectorAll('[data-action]').forEach(el=>{
+      el.addEventListener('click', (ev)=>{
+        const action = el.getAttribute('data-action');
+        const id = el.getAttribute('data-id');
+        if(action==='addFabric') modalAddFabric();
+        else if(action==='editFabric') modalEditFabric(fabricById(id));
+        else if(action==='deleteFabric') askConfirm('هل تريد حذف هذا القماش؟', ()=>deleteFabric(id));
+        else if(action==='addProduct') modalAddProduct();
+        else if(action==='editProduct') modalEditProduct(productById(id));
+        else if(action==='deleteProduct') askConfirm('هل تريد حذف هذا المنتج؟', ()=>deleteProduct(id));
+        else if(action==='addOrder') modalAddOrder();
+        else if(action==='deleteOrder') askConfirm('سيتم حذف الطلبية وكل أصنافها. متأكد؟', ()=>deleteOrder(id));
+        else if(action==='addOrderItem') modalAddOrderItem(id);
+        else if(action==='deleteOrderItem') deleteOrderItem(el.getAttribute('data-order'), el.getAttribute('data-item'));
+        else if(action==='closeModal') closeModal();
+        else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
+        else if(action==='confirmNo'){ confirmTarget=null; render(); }
+      });
+    });
+
+    const form = document.getElementById('modalForm');
+    if(form){
+      form.addEventListener('submit', (ev)=>{
+        ev.preventDefault();
+        const data = new FormData(form);
+        const vals = {};
+        for(const [k,v] of data.entries()) vals[k]=v;
+        const cfg = modal;
+        const missing = (cfg.fields||[]).find(f => f.type==='searchselect' && f.required && !vals[f.key]);
+        if(missing){ showToast('اختر "' + missing.label.replace(' (اكتب للبحث)','') + '" من القائمة'); return; }
+        modal = null;
+        cfg.onSubmit(vals);
+      });
+    }
+  }
+
+  load();
+})();
