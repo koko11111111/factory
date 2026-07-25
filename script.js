@@ -808,7 +808,7 @@
       return searchSelectFieldHtml(f);
     }
     if(f.type==='image'){
-      return imageFieldHtml(f);
+      return f.disableSearch ? imageFieldHtmlNoSearch(f) : imageFieldHtml(f);
     }
     if(f.type==='checkbox'){
       return `<div class="field checkbox-field"><label><input type="checkbox" name="${f.key}" ${f.checked?'checked':''} ${f.toggleTarget?`data-toggle-target="${f.toggleTarget}"`:''}> ${escapeHtml(f.label)}</label></div>`;
@@ -849,7 +849,7 @@
         <input type="hidden" name="${f.key}" id="imgInput_${f.key}" value="${escapeHtml(url)}">
         <div class="image-actions">
           <label class="btn ghost sm image-upload-btn">📁 رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
-          ${f.disableSearch ? '' : `<button type="button" class="btn ghost sm" data-image-search="${f.key}" data-query-fields="${escapeHtml(queryFieldsAttr)}">🔍 بحث عن صورة</button>`}
+          <button type="button" class="btn ghost sm" data-image-search="${f.key}" data-query-fields="${escapeHtml(queryFieldsAttr)}">🔍 بحث عن صورة</button>
           <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">✕ إزالة</button>
         </div>
         <div class="image-url-row">
@@ -857,6 +857,29 @@
           <button type="button" class="btn ghost sm" data-image-url-apply="${f.key}">تطبيق</button>
         </div>
         <div class="image-search-results" id="imgResults_${f.key}"></div>
+      </div>
+    </div>`;
+  }
+
+  // Product image field — deliberately has NO image-search button in its markup at all
+  // (not hidden, not conditional — the <button data-image-search> tag simply does not exist here).
+  function imageFieldHtmlNoSearch(f){
+    const url = f.value || '';
+    return `<div class="field field-image">
+      <label>${escapeHtml(f.label)}</label>
+      <div class="image-field">
+        <div class="image-preview" id="imgPreview_${f.key}">
+          ${url ? `<img src="${escapeHtml(url)}" alt="">` : `<div class="image-placeholder">لا توجد صورة</div>`}
+        </div>
+        <input type="hidden" name="${f.key}" id="imgInput_${f.key}" value="${escapeHtml(url)}">
+        <div class="image-actions">
+          <label class="btn ghost sm image-upload-btn">📁 رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
+          <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">✕ إزالة</button>
+        </div>
+        <div class="image-url-row">
+          <input type="text" placeholder="أو الصق رابط صورة مباشر (URL)" data-image-url-input="${f.key}">
+          <button type="button" class="btn ghost sm" data-image-url-apply="${f.key}">تطبيق</button>
+        </div>
       </div>
     </div>`;
   }
