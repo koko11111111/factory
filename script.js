@@ -7,7 +7,7 @@
   let state = {
     factoryName: "مصنع الأقمشة",
     fabrics: [],   // {id, code, color, total, used, image}
-    products: [],  // {id, name, cut, fabricId, metersPerPiece, price, image}
+    products: [],  // {id, code, name, cut, fabricId(nullable — null = ready-made product not tied to fabric stock), metersPerPiece, price, image}
     orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
   };
 
@@ -137,8 +137,8 @@
 
   function addProduct(vals){
     state.products.push({
-      id: uid(), name: vals.name.trim(), cut: vals.cut.trim(),
-      fabricId: vals.fabricId, metersPerPiece: Number(vals.meters)||0,
+      id: uid(), code: vals.code ? vals.code.trim() : '', name: vals.name.trim(), cut: vals.cut.trim(),
+      fabricId: vals.fabricId || null, metersPerPiece: Number(vals.meters)||0,
       price: vals.price ? Number(vals.price) : null,
       image: vals.image || null
     });
@@ -147,7 +147,7 @@
   function editProduct(id, vals){
     const p = productById(id);
     if(!p) return;
-    p.name = vals.name.trim(); p.cut = vals.cut.trim(); p.fabricId = vals.fabricId;
+    p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim(); p.fabricId = vals.fabricId || null;
     p.metersPerPiece = Number(vals.meters)||0; p.price = vals.price ? Number(vals.price) : null;
     p.image = vals.image || null;
     save(); showToast("تم تعديل المنتج"); render();
@@ -227,7 +227,7 @@
     return state.fabrics.map(f => ({ id: f.id, label: f.code + " — " + f.color + " (" + fmt(fabricRemaining(f)) + " م متبقي)" }));
   }
   function productSearchOptions(){
-    return state.products.map(p => ({ id: p.id, label: p.name + " — " + p.cut }));
+    return state.products.map(p => ({ id: p.id, label: (p.code ? p.code + " — " : "") + p.name + " — " + p.cut }));
   }
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -279,15 +279,15 @@
     });
   }
   function modalAddProduct(){
-    if(state.fabrics.length===0){ showToast("أضف قماشًا أولاً من تبويب الأقمشة"); return; }
     openModal({
       title: "إضافة منتج جديد",
       submitLabel: "إضافة",
       fields: [
+        {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', required:false},
         {key:'name', label:'اسم المنتج', type:'text', required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', required:true},
-        {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), required:true, emptyMsg:'لا يوجد قماش مسجل بعد'},
-        {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:true},
+        {key:'fabricId', label:'القماش المستخدم (اختياري — اتركه فارغًا لمنتج جاهز)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل — اتركه فارغًا إذا كان المنتج جاهزًا'},
+        {key:'meters', label:'متر لكل قطعة (فقط لو مرتبط بقماش)', type:'number', step:'0.1', required:false},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
         {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut']}
       ],
@@ -299,10 +299,11 @@
       title: "تعديل المنتج",
       submitLabel: "حفظ",
       fields: [
+        {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', value:p.code||'', required:false},
         {key:'name', label:'اسم المنتج', type:'text', value:p.name, required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', value:p.cut, required:true},
-        {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:true, emptyMsg:'لا يوجد قماش مسجل بعد'},
-        {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:true},
+        {key:'fabricId', label:'القماش المستخدم (اختياري — اتركه فارغًا لمنتج جاهز)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل — اتركه فارغًا إذا كان المنتج جاهزًا'},
+        {key:'meters', label:'متر لكل قطعة (فقط لو مرتبط بقماش)', type:'number', step:'0.1', value:p.metersPerPiece, required:false},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
         {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut']}
       ],
@@ -502,7 +503,7 @@
     const matchActive = !!imageMatchResults.products;
     let list = state.products.filter(p=>{
       const f = fabricById(p.fabricId);
-      return matches(p.name) || matches(p.cut) || (f && (matches(f.code) || matches(f.color)));
+      return matches(p.code) || matches(p.name) || matches(p.cut) || (f && (matches(f.code) || matches(f.color)));
     });
     let matchMap = null;
     if(matchActive){
@@ -520,20 +521,24 @@
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
-      <div class="section-note">كل منتج له قصة وشكل، وكود قماش ولون مرتبطين به.</div>
-      ${state.products.length>0 ? searchRowHtml('ابحث بالاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
+      <div class="section-note">لكل منتج رقم/كود خاص به، وربطه بقماش اختياري — اتركه فارغًا للمنتجات الجاهزة الصنع مسبقًا.</div>
+      ${state.products.length>0 ? searchRowHtml('ابحث بالرقم أو الاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الاسم</th><th>القصة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
       ${list.map((p,idx)=>{
-        const f = fabricById(p.fabricId);
+        const f = p.fabricId ? fabricById(p.fabricId) : null;
+        const fabricCell = p.fabricId
+          ? (f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">قماش محذوف</span>')
+          : '<span class="badge ok">جاهز</span>';
         const pct = matchActive ? matchMap.get(p.id) : null;
         return `<tr>
           <td>${thumbHtml(p.image, p.name)}</td>
+          <td class="mono">${p.code ? escapeHtml(p.code) : '<span class="muted">—</span>'}</td>
           <td>${escapeHtml(p.name)}</td>
           <td>${escapeHtml(p.cut)}</td>
-          <td>${f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">—</span>'}</td>
-          <td class="num">${fmt(p.metersPerPiece)}</td>
+          <td>${fabricCell}</td>
+          <td class="num">${p.fabricId ? fmt(p.metersPerPiece) : '<span class="muted">—</span>'}</td>
           <td class="num">${p.price ? fmt(p.price) : '<span class="muted">—</span>'}</td>
           ${matchActive ? `<td><span class="badge match${idx===0?' best':''}">${pct}%</span></td>` : ''}
           <td class="row-actions">
@@ -610,7 +615,7 @@
         return `<div class="order-item-row">
           <div style="display:flex;align-items:center;gap:8px;">
             ${thumbHtml(p&&p.image, p&&p.name)}
-            <b>${p?escapeHtml(p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>'}</b>
+            <b>${p?escapeHtml((p.code?p.code+' — ':'')+p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>'}</b>
           </div>
           <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
           <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
