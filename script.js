@@ -19,6 +19,16 @@
   let confirmTarget = null; // {message, onConfirm}
   let searchQuery = "";
 
+  // ---------- password lock / cross-device sync ----------
+  let authState = "checking"; // checking | needsSetup | needsLogin | unlocked
+  let authError = "";
+  let authBusy = false;
+  let currentUid = null;
+  let applyingRemoteUpdate = false; // guards against re-uploading a change we just received
+  let changePasswordModal = false;
+  let changePasswordError = "";
+  let changePasswordBusy = false;
+
   // ---------- "search by photo" (reverse match against saved fabric/product images) ----------
   let imageMatchPanelOpen = { fabrics:false, products:false };
   let imageMatchQueryImage = { fabrics:null, products:null };   // dataURL or URL currently loaded as the query photo
@@ -38,16 +48,57 @@
     return v.toLocaleString('en-US');
   }
 
-  async function load(){
+  function waitForAppSync(){
+    return new Promise(resolve=>{
+      if(window.AppSync) return resolve();
+      window.addEventListener("appsync-ready", ()=>resolve(), { once:true });
+    });
+  }
+
+  async function boot(){
+    // show cached local data instantly (if any) while we check auth in the background
     try{
       const raw = localStorage.getItem(STORAGE_KEY);
-      if(raw){
-        const parsed = JSON.parse(raw);
-        state = Object.assign(state, parsed);
-      }
-    }catch(e){
-      // no existing data yet — start fresh
+      if(raw) state = Object.assign(state, JSON.parse(raw));
+    }catch(e){ /* ignore */ }
+
+    await waitForAppSync();
+
+    if(!window.AppSync){
+      // Firebase not configured yet — behave exactly like the plain local-only app
+      authState = "unlocked";
+      render();
+      return;
     }
+
+    let hasPassword = false;
+    try{ hasPassword = await window.AppSync.checkHasPassword(); }
+    catch(e){ authError = e.message || "تعذر الاتصال، تحقق من الإنترنت"; }
+
+    window.AppSync.onReady(async (user) => {
+      if(user){
+        currentUid = user.uid;
+        authError = "";
+        const remote = await window.AppSync.loadData(user.uid);
+        if(remote) state = Object.assign(state, remote);
+        else await window.AppSync.saveData(user.uid, state); // first login: seed the cloud with local data
+        authState = "unlocked";
+        render();
+        window.AppSync.subscribe(user.uid, (remoteState) => {
+          applyingRemoteUpdate = true;
+          state = Object.assign(state, remoteState);
+          try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
+          render();
+          applyingRemoteUpdate = false;
+        });
+      } else {
+        currentUid = null;
+        authState = hasPassword ? "needsLogin" : "needsSetup";
+        render();
+      }
+    });
+
+    authState = hasPassword ? "needsLogin" : "needsSetup";
     render();
   }
 
@@ -55,7 +106,14 @@
     try{
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }catch(e){
-      showToast("تعذر حفظ البيانات، حاول مرة أخرى");
+      showToast("تعذر حفظ البيانات محليًا");
+    }
+    if(currentUid && !applyingRemoteUpdate){
+      try{
+        await window.AppSync.saveData(currentUid, state);
+      }catch(e){
+        showToast("اتحفظت البيانات على الجهاز، بس تعذرت المزامنة (تحقق من الإنترنت)");
+      }
     }
   }
 
@@ -377,7 +435,12 @@
   // ---------- rendering ----------
   function render(){
     const app = document.getElementById('app');
-    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '');
+    if(authState !== 'unlocked'){
+      app.innerHTML = lockScreenHtml();
+      bindLockEvents();
+      return;
+    }
+    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '') + (changePasswordModal? changePasswordModalHtml() : '');
     bindEvents();
   }
 
@@ -414,6 +477,70 @@
         <div class="qstat"><b>${fmt(totalSoldPieces())}</b><span>قطعة مباعة</span></div>
         <div class="qstat"><b>${activeOrders().length}</b><span>طلبية نشطة</span></div>
         <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
+        ${currentUid ? `
+        <button class="btn ghost sm icon-only" data-action="openChangePassword" title="تغيير كلمة السر" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔑</button>
+        <button class="btn ghost sm icon-only" data-action="lockApp" title="قفل" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔒</button>` : ''}
+      </div>
+    </div>`;
+  }
+
+  function lockScreenHtml(){
+    const factoryName = escapeHtml(state.factoryName || 'مصنع الأقمشة');
+    const brandMark = `<div class="lock-brand-mark"><svg viewBox="0 0 24 24" fill="none"><path d="M4 9L12 4L20 9V19H15V13H9V19H4V9Z" stroke="#F6F0DE" stroke-width="1.6" stroke-linejoin="round"/></svg></div>`;
+    if(authState === 'checking'){
+      return `<div class="lock-screen"><div class="lock-card">${brandMark}<div class="lock-title">${factoryName}</div><div class="lock-sub">...جارٍ التحميل</div></div></div>`;
+    }
+    const isSetup = authState === 'needsSetup';
+    return `<div class="lock-screen"><div class="lock-card">
+      ${brandMark}
+      <div class="lock-title">${factoryName}</div>
+      <div class="lock-sub">${isSetup ? 'أول مرة؟ اختر كلمة سر للتطبيق' : 'ادخل كلمة السر عشان تدخل'}</div>
+      <form id="lockForm">
+        <div class="field"><input type="password" id="lockPassword" placeholder="${isSetup?'اختار كلمة سر (٦ حروف/أرقام على الأقل)':'كلمة السر'}" minlength="${isSetup?6:1}" required></div>
+        ${isSetup ? `<div class="field"><input type="password" id="lockPasswordConfirm" placeholder="أكد كلمة السر" minlength="6" required></div>` : ''}
+        ${authError ? `<div class="lock-error">${escapeHtml(authError)}</div>` : ''}
+        <button type="submit" class="btn gold" style="width:100%; justify-content:center;" ${authBusy?'disabled':''}>${authBusy? '...جارٍ التحقق' : (isSetup?'إنشاء كلمة السر':'دخول')}</button>
+      </form>
+      ${isSetup ? '<div class="lock-note">كلمة السر دي هتفتح التطبيق على أي جهاز — لابتوب أو موبايل. محدش هيقدر يدخل من غيرها، واحفظها في مكان مأمون.</div>' : ''}
+    </div></div>`;
+  }
+
+  function bindLockEvents(){
+    const form = document.getElementById('lockForm');
+    if(!form) return;
+    form.addEventListener('submit', async (ev)=>{
+      ev.preventDefault();
+      const pw = document.getElementById('lockPassword').value;
+      if(authState === 'needsSetup'){
+        const confirmEl = document.getElementById('lockPasswordConfirm');
+        if(confirmEl && confirmEl.value !== pw){ authError = 'كلمة السر مش متطابقة'; render(); return; }
+      }
+      authBusy = true; authError = ''; render();
+      try{
+        if(authState === 'needsSetup') await window.AppSync.setup(pw);
+        else await window.AppSync.login(pw);
+        // on success, boot()'s onAuthStateChanged listener flips authState to 'unlocked' and re-renders
+      }catch(e){
+        authBusy = false; authError = e.message || 'حصل خطأ'; render();
+      }
+    });
+  }
+
+  function changePasswordModalHtml(){
+    return `<div class="overlay">
+      <div class="modal">
+        <button class="modal-close" data-action="closeChangePassword">✕</button>
+        <h3>تغيير كلمة السر</h3>
+        <form id="changePasswordForm">
+          <div class="field"><label>كلمة السر الحالية</label><input type="password" id="cpOld" required></div>
+          <div class="field"><label>كلمة السر الجديدة</label><input type="password" id="cpNew" minlength="6" required></div>
+          <div class="field"><label>تأكيد كلمة السر الجديدة</label><input type="password" id="cpConfirm" minlength="6" required></div>
+          ${changePasswordError ? `<div class="lock-error">${escapeHtml(changePasswordError)}</div>` : ''}
+          <div class="modal-actions">
+            <button type="submit" class="btn gold" ${changePasswordBusy?'disabled':''}>${changePasswordBusy?'...جارٍ الحفظ':'حفظ'}</button>
+            <button type="button" class="btn ghost" data-action="closeChangePassword">إلغاء</button>
+          </div>
+        </form>
       </div>
     </div>`;
   }
@@ -1144,6 +1271,14 @@
         else if(action==='closeModal') closeModal();
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
         else if(action==='confirmNo'){ confirmTarget=null; render(); }
+        else if(action==='openChangePassword'){ changePasswordModal=true; changePasswordError=''; render(); }
+        else if(action==='closeChangePassword'){ changePasswordModal=false; changePasswordError=''; render(); }
+        else if(action==='lockApp'){
+          askConfirm('هل تريد قفل التطبيق؟ هتحتاج تدخل كلمة السر تاني عشان تفتحه.', async ()=>{
+            await window.AppSync.logout();
+            authState = 'needsLogin'; authError=''; render();
+          });
+        }
       });
     });
 
@@ -1161,7 +1296,26 @@
         cfg.onSubmit(vals);
       });
     }
+
+    const cpForm = document.getElementById('changePasswordForm');
+    if(cpForm){
+      cpForm.addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const oldPw = document.getElementById('cpOld').value;
+        const newPw = document.getElementById('cpNew').value;
+        const confirmPw = document.getElementById('cpConfirm').value;
+        if(newPw !== confirmPw){ changePasswordError = 'كلمة السر الجديدة مش متطابقة'; render(); return; }
+        changePasswordBusy = true; changePasswordError = ''; render();
+        try{
+          await window.AppSync.changePassword(oldPw, newPw);
+          changePasswordBusy = false; changePasswordModal = false;
+          showToast('اتغيرت كلمة السر'); render();
+        }catch(e){
+          changePasswordBusy = false; changePasswordError = e.message || 'حصل خطأ'; render();
+        }
+      });
+    }
   }
 
-  load();
+  boot();
 })();

@@ -8,6 +8,26 @@ A single-page, no-build web app for managing fabrics, products, and production o
 - `style.css` — all styling
 - `script.js` — app logic (state, rendering, events)
 
+## Password + sync across devices (laptop, phone, etc.)
+
+The app now supports one shared password for the whole workshop, with data synced live across every device — powered by Firebase (a free Google backend service). No server for you to run or maintain, and it still deploys as a static site (GitHub Pages works fine).
+
+**One-time setup (~10 minutes), as the app owner:**
+
+1. Go to [console.firebase.google.com](https://console.firebase.google.com) and create a free project (any name).
+2. In the project, go to **Build → Firestore Database → Create database**. Start in **production mode**, pick any region.
+3. Go to the **Rules** tab of Firestore and paste in the contents of `firestore.rules.txt` (included in this folder), then **Publish**.
+4. Go to **Build → Authentication → Get started**, then enable the **Email/Password** sign-in provider (just toggle it on, no further setup).
+5. Go to **⚙️ Project settings → General**, scroll to "Your apps", click the **Web** icon (`</>`) to register a web app (any nickname), and copy the `firebaseConfig` object it gives you.
+6. Paste those values into `firebase-config.js` in this folder, replacing the placeholder strings.
+7. Deploy/open the site. The first person to open it picks a password (no email — that's only needed once, by you, to create the free Firebase project). From then on, every device just asks for that one password, and all data — fabrics, products, orders — syncs automatically between every device signed in with it.
+
+**Notes:**
+- The password can be changed anytime from the 🔑 button in the top bar (must know the current password). The 🔒 button locks the app on that device until the password is re-entered.
+- Firebase's free tier (Spark plan) comfortably covers a small workshop's usage.
+- Firestore documents have a 1MB size limit. If you attach a lot of large product/fabric photos, you could eventually hit that ceiling — if it comes up, the fix is moving images to Firebase Storage instead of storing them inline, which is a follow-up, not something you need to worry about today.
+- If you never do this setup, the app keeps working exactly as before (local-only, no password, `localStorage` on one device).
+
 ## Running locally
 
 Just open `index.html` in a browser, or serve the folder with any static server, e.g.:
