@@ -338,7 +338,7 @@
         {key:'code', label:'كود القماش', type:'text', required:true},
         {key:'color', label:'اللون', type:'text', required:true},
         {key:'qty', label:'الكمية (متر)', type:'number', required:true},
-        {key:'image', label:'صورة القماش', type:'image', value:'', queryFields:['code','color']}
+        {key:'image', label:'صورة القماش', type:'image', value:'', queryFields:['code','color'], disableSearch:true}
       ],
       onSubmit: vals => addFabric(vals)
     });
@@ -351,7 +351,7 @@
         {key:'code', label:'كود القماش', type:'text', value:f.code, required:true},
         {key:'color', label:'اللون', type:'text', value:f.color, required:true},
         {key:'qty', label:'إجمالي الكمية (متر)', type:'number', value:f.total, required:true},
-        {key:'image', label:'صورة القماش', type:'image', value:f.image||'', queryFields:['code','color']}
+        {key:'image', label:'صورة القماش', type:'image', value:f.image||'', queryFields:['code','color'], disableSearch:true}
       ],
       onSubmit: vals => editFabric(f.id, vals)
     });
