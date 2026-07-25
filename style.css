@@ -192,6 +192,7 @@
   .checkbox-field input[type="checkbox"]{ width:17px; height:17px; accent-color: var(--gold); cursor:pointer; flex-shrink:0; }
   .fabric-group{ background: rgba(0,0,0,.02); border:1px dashed var(--paper-2); border-radius:8px; padding:10px 10px 2px; margin: -2px 0 12px; }
   .fabric-group.collapsed{ display:none; }
+  .ready-hint{ font-size:13px; margin-top:6px; padding:6px 10px; border-radius:6px; background: rgba(47,111,107,.1); color: var(--teal-deep); }
 
   .overlay{
     position:fixed; inset:0; background: rgba(15,25,20,.55); backdrop-filter: blur(2px);

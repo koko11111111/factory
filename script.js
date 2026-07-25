@@ -7,7 +7,7 @@
   let state = {
     factoryName: "مصنع الأقمشة",
     fabrics: [],   // {id, code, color, total, used, image}
-    products: [],  // {id, code, name, cut, status('done'|'pending'), fabricId(nullable), metersPerPiece, price, image}
+    products: [],  // {id, code, name, cut, readyQty(units already made & in stock), fabricId(nullable), metersPerPiece, price, image}
     orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
   };
 
@@ -137,9 +137,10 @@
 
   function addProduct(vals){
     const usesFabric = !!vals.usesFabric;
+    const hasReady = !!vals.hasReady;
     state.products.push({
       id: uid(), code: vals.code ? vals.code.trim() : '', name: vals.name.trim(), cut: vals.cut.trim(),
-      status: vals.ready ? 'done' : 'pending',
+      readyQty: hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0,
       fabricId: usesFabric ? (vals.fabricId || null) : null,
       metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
       price: vals.price ? Number(vals.price) : null,
@@ -151,8 +152,9 @@
     const p = productById(id);
     if(!p) return;
     const usesFabric = !!vals.usesFabric;
+    const hasReady = !!vals.hasReady;
     p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim();
-    p.status = vals.ready ? 'done' : 'pending';
+    p.readyQty = hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0;
     p.fabricId = usesFabric ? (vals.fabricId || null) : null;
     p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
     p.price = vals.price ? Number(vals.price) : null;
@@ -180,7 +182,18 @@
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
-    o.items.push({ id: uid(), productId: vals.productId, ordered: Number(vals.ordered)||0, produced:0, sold:0 });
+    const ordered = Number(vals.ordered)||0;
+    const p = productById(vals.productId);
+    let produced = 0, fromReady = 0;
+    if(p && ordered>0 && (Number(p.readyQty)||0) > 0){
+      fromReady = Math.min(ordered, Number(p.readyQty)||0);
+      produced = fromReady;
+      p.readyQty = (Number(p.readyQty)||0) - fromReady;
+    }
+    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0 });
+    if(fromReady>0){
+      showToast(fromReady>=ordered ? `اتغطت الطلبية كلها من المخزون الجاهز (${fmt(fromReady)} قطعة)، مفيش داعي تنتج أكتر` : `اتغطى ${fmt(fromReady)} من ${fmt(ordered)} من المخزون الجاهز، والباقي محتاج إنتاج`);
+    }
     save(); render();
   }
   function deleteOrderItem(orderId, itemId){
@@ -293,7 +306,10 @@
         {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', required:false},
         {key:'name', label:'اسم المنتج', type:'text', required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', required:true},
-        {key:'ready', label:'✅ المنتج جاهز بالفعل', type:'checkbox', checked:false},
+        {key:'hasReady', label:'📦 عندي كمية جاهزة من المنتج ده دلوقتي', type:'checkbox', checked:false, toggleTarget:'readyGroup'},
+        {type:'group', groupId:'readyGroup', collapsed:true, fields:[
+          {key:'readyQty', label:'كام قطعة عندك جاهزة؟', type:'number', required:false}
+        ]},
         {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked:false, toggleTarget:'fabricGroup'},
         {type:'group', groupId:'fabricGroup', collapsed:true, fields:[
           {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل بعد'},
@@ -313,7 +329,10 @@
         {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', value:p.code||'', required:false},
         {key:'name', label:'اسم المنتج', type:'text', value:p.name, required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', value:p.cut, required:true},
-        {key:'ready', label:'✅ المنتج جاهز بالفعل', type:'checkbox', checked: p.status==='done'},
+        {key:'hasReady', label:'📦 عندي كمية جاهزة من المنتج ده دلوقتي', type:'checkbox', checked: (Number(p.readyQty)||0)>0, toggleTarget:'readyGroup'},
+        {type:'group', groupId:'readyGroup', collapsed: !((Number(p.readyQty)||0)>0), fields:[
+          {key:'readyQty', label:'كام قطعة عندك جاهزة؟', type:'number', value:p.readyQty||0, required:false}
+        ]},
         {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked: !!p.fabricId, toggleTarget:'fabricGroup'},
         {type:'group', groupId:'fabricGroup', collapsed: !p.fabricId, fields:[
           {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل بعد'},
@@ -343,7 +362,7 @@
       title: "إضافة صنف للطلبية",
       submitLabel: "إضافة",
       fields: [
-        {key:'productId', label:'المنتج / القصة (اكتب للبحث)', type:'searchselect', options: productSearchOptions(), required:true, emptyMsg:'لا يوجد منتجات بعد'},
+        {key:'productId', label:'المنتج / القصة (اكتب للبحث)', type:'searchselect', options: productSearchOptions(), required:true, emptyMsg:'لا يوجد منتجات بعد', showReadyHint:true},
         {key:'ordered', label:'الكمية المطلوبة', type:'number', required:true}
       ],
       onSubmit: vals => addOrderItem(orderId, vals)
@@ -536,24 +555,25 @@
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
-      <div class="section-note">لكل منتج رقم خاص به وحالة: تم بالفعل أو لسه هيتعمل. ربطه بقماش اختياري.</div>
+      <div class="section-note">لكل منتج رقم خاص به، وكمية جاهزة عندك دلوقتي (لو موجودة)، وربطه بقماش اختياري.</div>
       ${state.products.length>0 ? searchRowHtml('ابحث بالرقم أو الاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الحالة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الجاهز عندك</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
       ${list.map((p,idx)=>{
         const f = p.fabricId ? fabricById(p.fabricId) : null;
         const fabricCell = p.fabricId
           ? (f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">قماش محذوف</span>')
           : '<span class="muted">—</span>';
-        const statusBadge = p.status==='done' ? '<span class="badge ok">تم</span>' : '<span class="badge active">لسه هيتعمل</span>';
+        const readyQty = Number(p.readyQty)||0;
+        const readyCell = readyQty>0 ? `<span class="badge ok">${fmt(readyQty)} قطعة</span>` : '<span class="muted">0</span>';
         const pct = matchActive ? matchMap.get(p.id) : null;
         return `<tr>
           <td>${thumbHtml(p.image, p.name)}</td>
           <td class="mono">${p.code ? escapeHtml(p.code) : '<span class="muted">—</span>'}</td>
           <td>${escapeHtml(p.name)}</td>
           <td>${escapeHtml(p.cut)}</td>
-          <td>${statusBadge}</td>
+          <td>${readyCell}</td>
           <td>${fabricCell}</td>
           <td class="num">${p.fabricId ? fmt(p.metersPerPiece) : '<span class="muted">—</span>'}</td>
           <td class="num">${p.price ? fmt(p.price) : '<span class="muted">—</span>'}</td>
@@ -686,6 +706,7 @@
         ${options.map(o => `<option data-id="${escapeHtml(o.id)}" value="${escapeHtml(o.label)}"></option>`).join('')}
       </datalist>
       <input type="hidden" name="${f.key}" value="${escapeHtml(f.value||'')}">
+      ${f.showReadyHint ? `<div class="ready-hint" id="readyHint_${f.key}" style="display:none;"></div>` : ''}
     </div>`;
   }
 
@@ -994,6 +1015,7 @@
       const key = input.getAttribute('data-searchselect');
       const hidden = app.querySelector(`input[type="hidden"][name="${key}"]`);
       const datalist = document.getElementById('dl_'+key);
+      const hint = document.getElementById('readyHint_'+key);
       const sync = () => {
         const val = input.value.trim();
         let matchedId = '';
@@ -1002,6 +1024,19 @@
           if(found) matchedId = found.getAttribute('data-id');
         }
         if(hidden) hidden.value = matchedId;
+        if(hint){
+          const p = matchedId ? productById(matchedId) : null;
+          const readyQty = p ? (Number(p.readyQty)||0) : 0;
+          if(!p){
+            hint.style.display = 'none';
+          } else if(readyQty>0){
+            hint.innerHTML = `📦 عندك بالفعل <b>${fmt(readyQty)}</b> قطعة جاهزة من المنتج ده`;
+            hint.style.display = '';
+          } else {
+            hint.innerHTML = `⚠️ مفيش مخزون جاهز من المنتج ده — هيحتاج إنتاج`;
+            hint.style.display = '';
+          }
+        }
       };
       input.addEventListener('input', sync);
       input.addEventListener('change', sync);
