@@ -374,7 +374,7 @@
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
-        {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut']}
+        {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut'], disableSearch:true}
       ],
       onSubmit: vals => addProduct(vals)
     });
@@ -397,7 +397,7 @@
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
-        {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut']}
+        {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut'], disableSearch:true}
       ],
       onSubmit: vals => editProduct(p.id, vals)
     });
@@ -849,7 +849,7 @@
         <input type="hidden" name="${f.key}" id="imgInput_${f.key}" value="${escapeHtml(url)}">
         <div class="image-actions">
           <label class="btn ghost sm image-upload-btn">📁 رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
-          <button type="button" class="btn ghost sm" data-image-search="${f.key}" data-query-fields="${escapeHtml(queryFieldsAttr)}">🔍 بحث عن صورة</button>
+          ${f.disableSearch ? '' : `<button type="button" class="btn ghost sm" data-image-search="${f.key}" data-query-fields="${escapeHtml(queryFieldsAttr)}">🔍 بحث عن صورة</button>`}
           <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">✕ إزالة</button>
         </div>
         <div class="image-url-row">
