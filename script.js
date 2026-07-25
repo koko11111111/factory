@@ -11,8 +11,6 @@
     orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
   };
 
-  const IMAGE_SEARCH_ENDPOINT = "https://commons.wikimedia.org/w/api.php";
-
   let view = "dashboard"; // dashboard | fabrics | products | orders | orderDetail
   let activeOrderId = null;
   let modal = null; // {title, fields, submitLabel, onSubmit}
@@ -338,7 +336,7 @@
         {key:'code', label:'كود القماش', type:'text', required:true},
         {key:'color', label:'اللون', type:'text', required:true},
         {key:'qty', label:'الكمية (متر)', type:'number', required:true},
-        {key:'image', label:'صورة القماش', type:'image', value:'', queryFields:['code','color'], disableSearch:true}
+        {key:'image', label:'صورة القماش', type:'image', value:''}
       ],
       onSubmit: vals => addFabric(vals)
     });
@@ -351,7 +349,7 @@
         {key:'code', label:'كود القماش', type:'text', value:f.code, required:true},
         {key:'color', label:'اللون', type:'text', value:f.color, required:true},
         {key:'qty', label:'إجمالي الكمية (متر)', type:'number', value:f.total, required:true},
-        {key:'image', label:'صورة القماش', type:'image', value:f.image||'', queryFields:['code','color'], disableSearch:true}
+        {key:'image', label:'صورة القماش', type:'image', value:f.image||''}
       ],
       onSubmit: vals => editFabric(f.id, vals)
     });
@@ -374,7 +372,7 @@
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
-        {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut'], disableSearch:true}
+        {key:'image', label:'صورة المنتج', type:'image', value:''}
       ],
       onSubmit: vals => addProduct(vals)
     });
@@ -397,7 +395,7 @@
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
-        {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut'], disableSearch:true}
+        {key:'image', label:'صورة المنتج', type:'image', value:p.image||''}
       ],
       onSubmit: vals => editProduct(p.id, vals)
     });
@@ -808,7 +806,7 @@
       return searchSelectFieldHtml(f);
     }
     if(f.type==='image'){
-      return f.disableSearch ? imageFieldHtmlNoSearch(f) : imageFieldHtml(f);
+      return imageFieldHtml(f);
     }
     if(f.type==='checkbox'){
       return `<div class="field checkbox-field"><label><input type="checkbox" name="${f.key}" ${f.checked?'checked':''} ${f.toggleTarget?`data-toggle-target="${f.toggleTarget}"`:''}> ${escapeHtml(f.label)}</label></div>`;
@@ -837,33 +835,8 @@
     </div>`;
   }
 
+  // Image field renderer: upload + paste URL only. No image-search feature anywhere in this app.
   function imageFieldHtml(f){
-    const url = f.value || '';
-    const queryFieldsAttr = (f.queryFields||[]).join(',');
-    return `<div class="field field-image">
-      <label>${escapeHtml(f.label)}</label>
-      <div class="image-field">
-        <div class="image-preview" id="imgPreview_${f.key}">
-          ${url ? `<img src="${escapeHtml(url)}" alt="">` : `<div class="image-placeholder">لا توجد صورة</div>`}
-        </div>
-        <input type="hidden" name="${f.key}" id="imgInput_${f.key}" value="${escapeHtml(url)}">
-        <div class="image-actions">
-          <label class="btn ghost sm image-upload-btn">📁 رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
-          <button type="button" class="btn ghost sm" data-image-search="${f.key}" data-query-fields="${escapeHtml(queryFieldsAttr)}">🔍 بحث عن صورة</button>
-          <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">✕ إزالة</button>
-        </div>
-        <div class="image-url-row">
-          <input type="text" placeholder="أو الصق رابط صورة مباشر (URL)" data-image-url-input="${f.key}">
-          <button type="button" class="btn ghost sm" data-image-url-apply="${f.key}">تطبيق</button>
-        </div>
-        <div class="image-search-results" id="imgResults_${f.key}"></div>
-      </div>
-    </div>`;
-  }
-
-  // Product image field — deliberately has NO image-search button in its markup at all
-  // (not hidden, not conditional — the <button data-image-search> tag simply does not exist here).
-  function imageFieldHtmlNoSearch(f){
     const url = f.value || '';
     return `<div class="field field-image">
       <label>${escapeHtml(f.label)}</label>
@@ -946,93 +919,6 @@
     };
     reader.onerror = () => showToast('تعذر قراءة الملف');
     reader.readAsDataURL(file);
-  }
-
-  async function fetchImageSearchResults(query){
-    const params = new URLSearchParams({
-      action: 'query',
-      generator: 'search',
-      gsrsearch: query,
-      gsrlimit: '12',
-      gsrnamespace: '6', // File: namespace
-      prop: 'imageinfo',
-      iiprop: 'url|mime',
-      iiurlwidth: '300',
-      format: 'json',
-      origin: '*' // required for anonymous cross-origin requests to the MediaWiki API
-    });
-    const res = await fetch(IMAGE_SEARCH_ENDPOINT + '?' + params.toString());
-    if(!res.ok) throw new Error('search failed');
-    const data = await res.json();
-    const pages = (data.query && data.query.pages) || {};
-    return Object.values(pages)
-      .map(p => {
-        const info = p.imageinfo && p.imageinfo[0];
-        if(!info || !info.url) return null;
-        if(info.mime && !/^image\//.test(info.mime)) return null; // skip audio/video/pdf files
-        return { url: info.url, thumb: info.thumburl || info.url };
-      })
-      .filter(Boolean);
-  }
-
-  function searchBoxHtml(key, q){
-    return `<div class="image-search-box">
-      <input type="text" class="image-search-input" data-search-input-for="${key}" value="${escapeHtml(q||'')}" placeholder="ابحث عن صورة...">
-      <button type="button" class="btn ghost sm" data-search-go="${key}">بحث</button>
-    </div>`;
-  }
-
-  function bindImageSearchBox(key){
-    const goBtn = document.querySelector(`[data-search-go="${key}"]`);
-    const input = document.querySelector(`[data-search-input-for="${key}"]`);
-    if(goBtn) goBtn.addEventListener('click', () => runImageSearch(key, input ? input.value.trim() : ''));
-    if(input){
-      input.addEventListener('keydown', (e) => {
-        if(e.key==='Enter'){ e.preventDefault(); runImageSearch(key, input.value.trim()); }
-      });
-    }
-  }
-
-  function runImageSearch(key, queryOverride){
-    const resultsEl = document.getElementById('imgResults_'+key);
-    if(!resultsEl) return;
-    let query = queryOverride;
-    if(query===undefined){
-      const btn = document.querySelector(`[data-image-search="${key}"]`);
-      const qKeys = btn && btn.getAttribute('data-query-fields') ? btn.getAttribute('data-query-fields').split(',').filter(Boolean) : [];
-      const parts = qKeys.map(k=>{
-        const el = document.querySelector(`#modalForm [name="${k}"]`);
-        return el ? el.value.trim() : '';
-      }).filter(Boolean);
-      query = parts.join(' ');
-    }
-    if(!query){
-      resultsEl.innerHTML = searchBoxHtml(key, '') + `<div class="image-search-hint">اكتب اسمًا أعلاه أو استخدم مربع البحث هنا</div>`;
-      bindImageSearchBox(key);
-      return;
-    }
-    resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">🔎 جارٍ البحث عن "${escapeHtml(query)}"...</div>`;
-    bindImageSearchBox(key);
-    fetchImageSearchResults(query).then(items=>{
-      if(!items || items.length===0){
-        resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">لا توجد نتائج لهذا البحث. جرّب كلمة أخرى أو أدخل رابط صورة يدويًا.</div>`;
-        bindImageSearchBox(key);
-        return;
-      }
-      resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-results-grid">${items.map(it=>
-        `<button type="button" class="image-result" data-pick-image="${key}" data-url="${escapeHtml(it.url)}"><img src="${escapeHtml(it.thumb)}" alt="" loading="lazy"></button>`
-      ).join('')}</div>`;
-      bindImageSearchBox(key);
-      resultsEl.querySelectorAll('[data-pick-image]').forEach(elx=>{
-        elx.addEventListener('click', ()=>{
-          setImageFieldValue(key, elx.getAttribute('data-url'));
-          resultsEl.innerHTML = '';
-        });
-      });
-    }).catch(()=>{
-      resultsEl.innerHTML = searchBoxHtml(key, query) + `<div class="image-search-hint">تعذر البحث عن صور الآن. تحقق من الاتصال بالإنترنت، أو أدخل رابط صورة يدويًا أعلاه.</div>`;
-      bindImageSearchBox(key);
-    });
   }
 
   // ---------- reverse image match (perceptual hash, fully client-side) ----------
@@ -1209,9 +1095,6 @@
         if(!file) return;
         readImageFile(file, dataUrl => setImageFieldValue(key, dataUrl));
       });
-    });
-    app.querySelectorAll('[data-image-search]').forEach(btn=>{
-      btn.addEventListener('click', ()=> runImageSearch(btn.getAttribute('data-image-search')));
     });
     app.querySelectorAll('[data-image-clear]').forEach(btn=>{
       btn.addEventListener('click', ()=> setImageFieldValue(btn.getAttribute('data-image-clear'), ''));
