@@ -27,7 +27,7 @@ python3 -m http.server
 
 ## Features
 
-- **Product code** — each product can have its own number/code, independent from any fabric. Linking a product to a fabric is optional, so you can register ready-made products you already have in stock without tying them to tracked fabric yardage. Products without a fabric link show a "جاهز" (ready) badge and skip fabric-consumption tracking.
+- **Product number & status** — each product can have its own number/code, plus a status: "تم بالفعل" (already done — e.g. ready-made stock you already have) or "لسه هيتعمل" (still needs to be produced). Linking a product to a fabric is optional.
 - **Search** on the Fabrics tab (by code or color) and the Products tab (by name, cut, or fabric). Picking a fabric when adding a product, and picking a product/cut when adding an order item, are also searchable (type to filter instead of scrolling a long list).
 - **Images** — each fabric and each product can have a photo, added three ways:
   - Upload a photo from your device (resized/compressed automatically before saving).

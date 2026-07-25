@@ -7,7 +7,7 @@
   let state = {
     factoryName: "مصنع الأقمشة",
     fabrics: [],   // {id, code, color, total, used, image}
-    products: [],  // {id, code, name, cut, fabricId(nullable — null = ready-made product not tied to fabric stock), metersPerPiece, price, image}
+    products: [],  // {id, code, name, cut, status('done'|'pending'), fabricId(nullable), metersPerPiece, price, image}
     orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
   };
 
@@ -138,6 +138,7 @@
   function addProduct(vals){
     state.products.push({
       id: uid(), code: vals.code ? vals.code.trim() : '', name: vals.name.trim(), cut: vals.cut.trim(),
+      status: vals.status==='done' ? 'done' : 'pending',
       fabricId: vals.fabricId || null, metersPerPiece: Number(vals.meters)||0,
       price: vals.price ? Number(vals.price) : null,
       image: vals.image || null
@@ -147,7 +148,9 @@
   function editProduct(id, vals){
     const p = productById(id);
     if(!p) return;
-    p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim(); p.fabricId = vals.fabricId || null;
+    p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim();
+    p.status = vals.status==='done' ? 'done' : 'pending';
+    p.fabricId = vals.fabricId || null;
     p.metersPerPiece = Number(vals.meters)||0; p.price = vals.price ? Number(vals.price) : null;
     p.image = vals.image || null;
     save(); showToast("تم تعديل المنتج"); render();
@@ -226,6 +229,13 @@
   function fabricSearchOptions(){
     return state.fabrics.map(f => ({ id: f.id, label: f.code + " — " + f.color + " (" + fmt(fabricRemaining(f)) + " م متبقي)" }));
   }
+  function statusOptionsHtml(selected){
+    const opts = [
+      {v:'pending', label:'لسه هيتعمل'},
+      {v:'done', label:'تم بالفعل'}
+    ];
+    return opts.map(o => `<option value="${o.v}" ${o.v===selected?'selected':''}>${o.label}</option>`).join('');
+  }
   function productSearchOptions(){
     return state.products.map(p => ({ id: p.id, label: (p.code ? p.code + " — " : "") + p.name + " — " + p.cut }));
   }
@@ -286,7 +296,8 @@
         {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', required:false},
         {key:'name', label:'اسم المنتج', type:'text', required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', required:true},
-        {key:'fabricId', label:'القماش المستخدم (اختياري — اتركه فارغًا لمنتج جاهز)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل — اتركه فارغًا إذا كان المنتج جاهزًا'},
+        {key:'status', label:'الحالة', type:'select', required:true, optionsHtml: statusOptionsHtml('pending')},
+        {key:'fabricId', label:'القماش المستخدم (اختياري)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل بعد (يمكنك تركه فارغًا)'},
         {key:'meters', label:'متر لكل قطعة (فقط لو مرتبط بقماش)', type:'number', step:'0.1', required:false},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
         {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut']}
@@ -302,7 +313,8 @@
         {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', value:p.code||'', required:false},
         {key:'name', label:'اسم المنتج', type:'text', value:p.name, required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', value:p.cut, required:true},
-        {key:'fabricId', label:'القماش المستخدم (اختياري — اتركه فارغًا لمنتج جاهز)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل — اتركه فارغًا إذا كان المنتج جاهزًا'},
+        {key:'status', label:'الحالة', type:'select', required:true, optionsHtml: statusOptionsHtml(p.status||'pending')},
+        {key:'fabricId', label:'القماش المستخدم (اختياري)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل بعد (يمكنك تركه فارغًا)'},
         {key:'meters', label:'متر لكل قطعة (فقط لو مرتبط بقماش)', type:'number', step:'0.1', value:p.metersPerPiece, required:false},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
         {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut']}
@@ -521,22 +533,24 @@
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
-      <div class="section-note">لكل منتج رقم/كود خاص به، وربطه بقماش اختياري — اتركه فارغًا للمنتجات الجاهزة الصنع مسبقًا.</div>
+      <div class="section-note">لكل منتج رقم خاص به وحالة: تم بالفعل أو لسه هيتعمل. ربطه بقماش اختياري.</div>
       ${state.products.length>0 ? searchRowHtml('ابحث بالرقم أو الاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الحالة</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
       ${list.map((p,idx)=>{
         const f = p.fabricId ? fabricById(p.fabricId) : null;
         const fabricCell = p.fabricId
           ? (f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">قماش محذوف</span>')
-          : '<span class="badge ok">جاهز</span>';
+          : '<span class="muted">—</span>';
+        const statusBadge = p.status==='done' ? '<span class="badge ok">تم</span>' : '<span class="badge active">لسه هيتعمل</span>';
         const pct = matchActive ? matchMap.get(p.id) : null;
         return `<tr>
           <td>${thumbHtml(p.image, p.name)}</td>
           <td class="mono">${p.code ? escapeHtml(p.code) : '<span class="muted">—</span>'}</td>
           <td>${escapeHtml(p.name)}</td>
           <td>${escapeHtml(p.cut)}</td>
+          <td>${statusBadge}</td>
           <td>${fabricCell}</td>
           <td class="num">${p.fabricId ? fmt(p.metersPerPiece) : '<span class="muted">—</span>'}</td>
           <td class="num">${p.price ? fmt(p.price) : '<span class="muted">—</span>'}</td>
