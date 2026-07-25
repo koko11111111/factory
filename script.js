@@ -136,10 +136,12 @@
   }
 
   function addProduct(vals){
+    const usesFabric = !!vals.usesFabric;
     state.products.push({
       id: uid(), code: vals.code ? vals.code.trim() : '', name: vals.name.trim(), cut: vals.cut.trim(),
-      status: vals.status==='done' ? 'done' : 'pending',
-      fabricId: vals.fabricId || null, metersPerPiece: Number(vals.meters)||0,
+      status: vals.ready ? 'done' : 'pending',
+      fabricId: usesFabric ? (vals.fabricId || null) : null,
+      metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
       price: vals.price ? Number(vals.price) : null,
       image: vals.image || null
     });
@@ -148,10 +150,12 @@
   function editProduct(id, vals){
     const p = productById(id);
     if(!p) return;
+    const usesFabric = !!vals.usesFabric;
     p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim();
-    p.status = vals.status==='done' ? 'done' : 'pending';
-    p.fabricId = vals.fabricId || null;
-    p.metersPerPiece = Number(vals.meters)||0; p.price = vals.price ? Number(vals.price) : null;
+    p.status = vals.ready ? 'done' : 'pending';
+    p.fabricId = usesFabric ? (vals.fabricId || null) : null;
+    p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
+    p.price = vals.price ? Number(vals.price) : null;
     p.image = vals.image || null;
     save(); showToast("تم تعديل المنتج"); render();
   }
@@ -229,13 +233,6 @@
   function fabricSearchOptions(){
     return state.fabrics.map(f => ({ id: f.id, label: f.code + " — " + f.color + " (" + fmt(fabricRemaining(f)) + " م متبقي)" }));
   }
-  function statusOptionsHtml(selected){
-    const opts = [
-      {v:'pending', label:'لسه هيتعمل'},
-      {v:'done', label:'تم بالفعل'}
-    ];
-    return opts.map(o => `<option value="${o.v}" ${o.v===selected?'selected':''}>${o.label}</option>`).join('');
-  }
   function productSearchOptions(){
     return state.products.map(p => ({ id: p.id, label: (p.code ? p.code + " — " : "") + p.name + " — " + p.cut }));
   }
@@ -296,9 +293,12 @@
         {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', required:false},
         {key:'name', label:'اسم المنتج', type:'text', required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', required:true},
-        {key:'status', label:'الحالة', type:'select', required:true, optionsHtml: statusOptionsHtml('pending')},
-        {key:'fabricId', label:'القماش المستخدم (اختياري)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل بعد (يمكنك تركه فارغًا)'},
-        {key:'meters', label:'متر لكل قطعة (فقط لو مرتبط بقماش)', type:'number', step:'0.1', required:false},
+        {key:'ready', label:'✅ المنتج جاهز بالفعل', type:'checkbox', checked:false},
+        {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked:false, toggleTarget:'fabricGroup'},
+        {type:'group', groupId:'fabricGroup', collapsed:true, fields:[
+          {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل بعد'},
+          {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:false}
+        ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
         {key:'image', label:'صورة المنتج', type:'image', value:'', queryFields:['name','cut']}
       ],
@@ -313,9 +313,12 @@
         {key:'code', label:'رقم/كود المنتج (اختياري)', type:'text', value:p.code||'', required:false},
         {key:'name', label:'اسم المنتج', type:'text', value:p.name, required:true},
         {key:'cut', label:'القصة / الشكل', type:'text', value:p.cut, required:true},
-        {key:'status', label:'الحالة', type:'select', required:true, optionsHtml: statusOptionsHtml(p.status||'pending')},
-        {key:'fabricId', label:'القماش المستخدم (اختياري)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل بعد (يمكنك تركه فارغًا)'},
-        {key:'meters', label:'متر لكل قطعة (فقط لو مرتبط بقماش)', type:'number', step:'0.1', value:p.metersPerPiece, required:false},
+        {key:'ready', label:'✅ المنتج جاهز بالفعل', type:'checkbox', checked: p.status==='done'},
+        {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked: !!p.fabricId, toggleTarget:'fabricGroup'},
+        {type:'group', groupId:'fabricGroup', collapsed: !p.fabricId, fields:[
+          {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل بعد'},
+          {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:false}
+        ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
         {key:'image', label:'صورة المنتج', type:'image', value:p.image||'', queryFields:['name','cut']}
       ],
@@ -660,6 +663,12 @@
     if(f.type==='image'){
       return imageFieldHtml(f);
     }
+    if(f.type==='checkbox'){
+      return `<div class="field checkbox-field"><label><input type="checkbox" name="${f.key}" ${f.checked?'checked':''} ${f.toggleTarget?`data-toggle-target="${f.toggleTarget}"`:''}> ${escapeHtml(f.label)}</label></div>`;
+    }
+    if(f.type==='group'){
+      return `<div class="fabric-group ${f.collapsed?'collapsed':''}" id="${f.groupId}">${(f.fields||[]).map(fieldHtml).join('')}</div>`;
+    }
     return `<div class="field"><label>${escapeHtml(f.label)}</label><input type="${f.type}" name="${f.key}" ${f.step?'step="'+f.step+'"':''} value="${f.value!==undefined?escapeHtml(f.value):''}" ${f.required?'required':''}></div>`;
   }
 
@@ -997,6 +1006,14 @@
       input.addEventListener('input', sync);
       input.addEventListener('change', sync);
       sync();
+    });
+
+    // checkbox that shows/hides a field group (e.g. the fabric section)
+    app.querySelectorAll('[data-toggle-target]').forEach(cb=>{
+      cb.addEventListener('change', ()=>{
+        const target = document.getElementById(cb.getAttribute('data-toggle-target'));
+        if(target) target.classList.toggle('collapsed', !cb.checked);
+      });
     });
 
     // image fields: upload, search, manual URL, clear

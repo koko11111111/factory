@@ -188,6 +188,11 @@
   .field-row{ display:flex; gap:10px; }
   .field-row .field{ flex:1; }
 
+  .checkbox-field label{ display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color: var(--ink); cursor:pointer; margin-bottom:0; }
+  .checkbox-field input[type="checkbox"]{ width:17px; height:17px; accent-color: var(--gold); cursor:pointer; flex-shrink:0; }
+  .fabric-group{ background: rgba(0,0,0,.02); border:1px dashed var(--paper-2); border-radius:8px; padding:10px 10px 2px; margin: -2px 0 12px; }
+  .fabric-group.collapsed{ display:none; }
+
   .overlay{
     position:fixed; inset:0; background: rgba(15,25,20,.55); backdrop-filter: blur(2px);
     display:flex; align-items:center; justify-content:center; z-index:50; padding:16px;
