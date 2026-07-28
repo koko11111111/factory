@@ -8,7 +8,7 @@
     factoryName: "مصنع الأقمشة",
     fabrics: [],   // {id, code, color, total, used, image}
     products: [],  // {id, code, name, cut, readyQty(units already made & in stock), fabricId(nullable), metersPerPiece, price, image}
-    orders: []     // {id, name, date, items:[{id, productId, ordered, produced, sold}]}
+    orders: []     // {id, name, date, dueDate(nullable, expected delivery), items:[{id, productId, ordered, produced, sold}]}
   };
 
   let view = "dashboard"; // dashboard | fabrics | products | orders | orderDetail
@@ -164,19 +164,47 @@
   function activeOrders(){
     return state.orders.filter(o => !orderProgress(o).complete);
   }
+  function todayISO(){
+    return new Date().toISOString().slice(0,10);
+  }
+  function isOrderOverdue(o){
+    if(!o.dueDate) return false;
+    if(orderProgress(o).complete) return false;
+    return o.dueDate < todayISO();
+  }
+  function overdueOrders(){
+    return state.orders.filter(isOrderOverdue);
+  }
+  function daysDiffLabel(dueDate){
+    const diff = Math.round((new Date(dueDate) - new Date(todayISO())) / 86400000);
+    if(diff === 0) return "النهارده";
+    if(diff > 0) return `متبقي ${diff} يوم`;
+    return `متأخرة ${Math.abs(diff)} يوم`;
+  }
 
   // ---------- mutations ----------
   function addFabric(vals){
-    const existing = state.fabrics.find(f => f.code.trim()===vals.code.trim() && f.color.trim()===vals.color.trim());
-    if(existing){
-      existing.total = (Number(existing.total)||0) + Number(vals.qty);
-      if(vals.image) existing.image = vals.image;
-      showToast("تمت إضافة الكمية إلى القماش الموجود");
-    } else {
-      state.fabrics.push({ id: uid(), code: vals.code.trim(), color: vals.color.trim(), total: Number(vals.qty)||0, used: 0, image: vals.image || null });
-      showToast("تمت إضافة القماش");
-    }
-    save(); render();
+    const rows = extractColorRows(vals);
+    if(rows.length===0){ showToast("أدخل لون واحد على الأقل"); return; }
+    const code = vals.code.trim();
+    let addedCount = 0, mergedCount = 0;
+    rows.forEach(row=>{
+      const existing = state.fabrics.find(f => f.code.trim()===code && f.color.trim().toLowerCase()===row.color.toLowerCase());
+      if(existing){
+        existing.total = (Number(existing.total)||0) + row.qty;
+        if(vals.image) existing.image = vals.image;
+        mergedCount++;
+      } else {
+        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: vals.image || null });
+        addedCount++;
+      }
+    });
+    save();
+    const parts = [];
+    if(addedCount) parts.push(addedCount>1 ? `تمت إضافة ${addedCount} ألوان جديدة` : "تمت إضافة القماش");
+    if(mergedCount) parts.push(`اتضافت الكمية لـ ${mergedCount} لون موجود بالفعل`);
+    showToast(parts.join(" و "));
+    render();
   }
   function editFabric(id, vals){
     const f = fabricById(id);
@@ -195,15 +223,25 @@
   function addProduct(vals){
     const usesFabric = !!vals.usesFabric;
     const hasReady = !!vals.hasReady;
-    state.products.push({
-      id: uid(), code: vals.code ? vals.code.trim() : '', name: vals.name.trim(), cut: vals.cut.trim(),
+    const fabricIds = usesFabric ? extractMultiSelectIds(vals, 'fabricIds') : [];
+    if(usesFabric && fabricIds.length===0){ showToast("اختر لون قماش واحد على الأقل"); return; }
+    const base = {
+      code: vals.code ? vals.code.trim() : '',
+      name: vals.name.trim(),
+      cut: vals.cut.trim(),
       readyQty: hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0,
-      fabricId: usesFabric ? (vals.fabricId || null) : null,
       metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
       price: vals.price ? Number(vals.price) : null,
       image: vals.image || null
-    });
-    save(); showToast("تمت إضافة المنتج"); render();
+    };
+    if(!usesFabric){
+      state.products.push({ id: uid(), ...base, fabricId: null });
+    } else {
+      fabricIds.forEach(fid => state.products.push({ id: uid(), ...base, fabricId: fid }));
+    }
+    save();
+    showToast(fabricIds.length>1 ? `تمت إضافة ${fabricIds.length} منتجات (نسخة لكل لون)` : "تمت إضافة المنتج");
+    render();
   }
   function editProduct(id, vals){
     const p = productById(id);
@@ -226,10 +264,16 @@
   }
 
   function addOrder(vals){
-    const o = { id: uid(), name: vals.name.trim(), date: vals.date, items: [] };
+    const o = { id: uid(), name: vals.name.trim(), date: vals.date, dueDate: vals.dueDate || null, items: [] };
     state.orders.push(o);
     save(); render();
     activeOrderId = o.id; view = "orderDetail"; render();
+  }
+  function editOrder(id, vals){
+    const o = orderById(id);
+    if(!o) return;
+    o.name = vals.name.trim(); o.date = vals.date; o.dueDate = vals.dueDate || null;
+    save(); showToast("تم تعديل الطلبية"); render();
   }
   function deleteOrder(id){
     state.orders = state.orders.filter(o=>o.id!==id);
@@ -335,9 +379,8 @@
       submitLabel: "إضافة",
       fields: [
         {key:'code', label:'كود القماش', type:'text', required:true},
-        {key:'color', label:'اللون', type:'text', required:true},
-        {key:'qty', label:'الكمية (متر)', type:'number', required:true},
-        {key:'image', label:'صورة القماش', type:'image', value:''}
+        {type:'colorRows', key:'colors', label:'الألوان والكميات'},
+        {key:'image', label:'صورة القماش (تُطبَّق على كل الألوان)', type:'image', value:''}
       ],
       onSubmit: vals => addFabric(vals)
     });
@@ -369,7 +412,7 @@
         ]},
         {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked:false, toggleTarget:'fabricGroup'},
         {type:'group', groupId:'fabricGroup', collapsed:true, fields:[
-          {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), required:false, emptyMsg:'لا يوجد قماش مسجل بعد'},
+          {key:'fabricIds', type:'fabricMultiSelect', label:'ألوان القماش المستخدمة', options: fabricSearchOptions(), emptyMsg:'لا يوجد قماش مسجل بعد'},
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
@@ -408,9 +451,22 @@
       submitLabel: "إنشاء",
       fields: [
         {key:'name', label:'اسم الطلبية / العميل', type:'text', required:true},
-        {key:'date', label:'التاريخ', type:'date', value:today, required:true}
+        {key:'date', label:'التاريخ', type:'date', value:today, required:true},
+        {key:'dueDate', label:'تاريخ التسليم المتوقع (اختياري)', type:'date', required:false}
       ],
       onSubmit: vals => addOrder(vals)
+    });
+  }
+  function modalEditOrder(o){
+    openModal({
+      title: "تعديل الطلبية",
+      submitLabel: "حفظ",
+      fields: [
+        {key:'name', label:'اسم الطلبية / العميل', type:'text', value:o.name, required:true},
+        {key:'date', label:'التاريخ', type:'date', value:o.date, required:true},
+        {key:'dueDate', label:'تاريخ التسليم المتوقع (اختياري)', type:'date', value:o.dueDate||''}
+      ],
+      onSubmit: vals => editOrder(o.id, vals)
     });
   }
   function modalAddOrderItem(orderId){
@@ -423,6 +479,14 @@
         {key:'ordered', label:'الكمية المطلوبة', type:'number', required:true}
       ],
       onSubmit: vals => addOrderItem(orderId, vals)
+    });
+  }
+
+  function bindColorRowRemove(btn, container){
+    if(!btn || !container) return;
+    btn.addEventListener('click', ()=>{
+      if(container.querySelectorAll('.color-row').length<=1){ showToast("لازم يفضل لون واحد على الأقل"); return; }
+      btn.closest('.color-row').remove();
     });
   }
 
@@ -889,6 +953,12 @@
     if(f.type==='searchselect'){
       return searchSelectFieldHtml(f);
     }
+    if(f.type==='colorRows'){
+      return colorRowsFieldHtml(f);
+    }
+    if(f.type==='fabricMultiSelect'){
+      return fabricMultiSelectFieldHtml(f);
+    }
     if(f.type==='image'){
       return imageFieldHtml(f);
     }
@@ -917,6 +987,59 @@
       <input type="hidden" name="${f.key}" value="${escapeHtml(f.value||'')}">
       ${f.showReadyHint ? `<div class="ready-hint" id="readyHint_${f.key}" style="display:none;"></div>` : ''}
     </div>`;
+  }
+
+  // ---------- repeatable "color + quantity" rows (add many fabric colors under one code at once) ----------
+  function colorRowHtml(idx, color, qty){
+    return `<div class="color-row">
+      <input type="text" name="mc_color_${idx}" placeholder="اللون (مثلاً: أحمر)" value="${escapeHtml(color||'')}">
+      <input type="number" name="mc_qty_${idx}" placeholder="الكمية (متر)" min="0" step="0.1" value="${qty!==undefined && qty!==null && qty!=='' ? escapeHtml(qty) : ''}">
+      <button type="button" class="btn red sm icon-only" data-remove-color-row title="حذف اللون">✕</button>
+    </div>`;
+  }
+  function colorRowsFieldHtml(f){
+    return `<div class="field">
+      <label>${escapeHtml(f.label)}</label>
+      <div class="muted" style="font-size:12px;margin:-2px 0 8px;">أضف كل لون بمتراته — تقدر تضيف أكتر من لون بنفس الكود ده دفعة واحدة بدل ما تكرر الكود كل مرة</div>
+      <div class="color-rows" id="colorRows_${f.key}" data-seq="1">
+        ${colorRowHtml(0)}
+      </div>
+      <button type="button" class="btn ghost sm" data-add-color-row="${f.key}" style="margin-top:8px;">+ لون تاني</button>
+    </div>`;
+  }
+
+  // ---------- multi-select checklist (link a product to several fabric colors → one product per color) ----------
+  function fabricMultiSelectFieldHtml(f){
+    const options = f.options || [];
+    if(options.length===0){
+      return `<div class="field"><label>${escapeHtml(f.label)}</label><div class="muted" style="font-size:13px;">${escapeHtml(f.emptyMsg||'لا توجد خيارات بعد')}</div></div>`;
+    }
+    const selectedSet = new Set(f.value || []);
+    return `<div class="field">
+      <label>${escapeHtml(f.label)}</label>
+      <div class="muted" style="font-size:12px;margin:-2px 0 8px;">اختر لون واحد أو أكتر — لو اخترت أكتر من لون هيتعمل نسخة من المنتج لكل لون تختاره</div>
+      <input type="text" class="fms-filter" placeholder="اكتب للتصفية..." data-fms-filter="${f.key}">
+      <div class="fms-list" id="fmsList_${f.key}">
+        ${options.map(o => `<label class="fms-item"><input type="checkbox" name="fm_${f.key}_${escapeHtml(o.id)}" ${selectedSet.has(o.id)?'checked':''}><span>${escapeHtml(o.label)}</span></label>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  function extractColorRows(vals){
+    const rows = [];
+    Object.keys(vals).forEach(k=>{
+      const m = k.match(/^mc_color_(\d+)$/);
+      if(!m) return;
+      const color = (vals[k]||'').trim();
+      if(!color) return;
+      const qty = Number(vals['mc_qty_'+m[1]]) || 0;
+      rows.push({ color, qty });
+    });
+    return rows;
+  }
+  function extractMultiSelectIds(vals, key){
+    const prefix = 'fm_'+key+'_';
+    return Object.keys(vals).filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length));
   }
 
   // Image field renderer: upload + paste URL only. No image-search feature anywhere in this app.
@@ -1214,6 +1337,40 @@
       cb.addEventListener('change', ()=>{
         const target = document.getElementById(cb.getAttribute('data-toggle-target'));
         if(target) target.classList.toggle('collapsed', !cb.checked);
+      });
+    });
+
+    // repeatable color+qty rows (fabric multi-color add): add row, remove row
+    app.querySelectorAll('[data-add-color-row]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const key = btn.getAttribute('data-add-color-row');
+        const container = document.getElementById('colorRows_'+key);
+        if(!container) return;
+        const idx = Number(container.getAttribute('data-seq'))||1;
+        container.insertAdjacentHTML('beforeend', colorRowHtml(idx));
+        container.setAttribute('data-seq', idx+1);
+        const newRow = container.lastElementChild;
+        bindColorRowRemove(newRow.querySelector('[data-remove-color-row]'), container);
+        const colorInput = newRow.querySelector('input[type="text"]');
+        if(colorInput) colorInput.focus();
+      });
+    });
+    app.querySelectorAll('.color-rows').forEach(container=>{
+      container.querySelectorAll('[data-remove-color-row]').forEach(btn=>{
+        bindColorRowRemove(btn, container);
+      });
+    });
+
+    // fabric multi-select checklist: live text filter over the checkbox list
+    app.querySelectorAll('[data-fms-filter]').forEach(inp=>{
+      const key = inp.getAttribute('data-fms-filter');
+      const list = document.getElementById('fmsList_'+key);
+      if(!list) return;
+      inp.addEventListener('input', ()=>{
+        const q = inp.value.trim().toLowerCase();
+        list.querySelectorAll('.fms-item').forEach(item=>{
+          item.style.display = (!q || item.textContent.toLowerCase().includes(q)) ? '' : 'none';
+        });
       });
     });
 

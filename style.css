@@ -194,6 +194,21 @@
   .fabric-group.collapsed{ display:none; }
   .ready-hint{ font-size:13px; margin-top:6px; padding:6px 10px; border-radius:6px; background: rgba(47,111,107,.1); color: var(--teal-deep); }
 
+  /* ---------- repeatable color rows (fabric: add several colors under one code at once) ---------- */
+  .color-rows{ display:flex; flex-direction:column; gap:8px; }
+  .color-row{ display:flex; gap:8px; align-items:center; }
+  .color-row input[type="text"]{ flex:1.6; width:auto; padding:8px 10px; border-radius:7px; border:1px solid var(--paper-2); background:#fff; font-size:14px; }
+  .color-row input[type="number"]{ flex:1; width:auto; padding:8px 10px; border-radius:7px; border:1px solid var(--paper-2); background:#fff; font-size:14px; }
+  .color-row input:focus{ border-color: var(--gold); }
+
+  /* ---------- fabric multi-select checklist (product: link to several colors at once) ---------- */
+  .fms-filter{ width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--paper-2); background:#fff; font-size:13px; margin-bottom:8px; }
+  .fms-filter:focus{ border-color: var(--gold); }
+  .fms-list{ max-height:180px; overflow-y:auto; border:1px solid var(--paper-2); border-radius:8px; padding:6px; display:flex; flex-direction:column; gap:2px; }
+  .fms-item{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:6px; font-size:13.5px; cursor:pointer; margin:0; }
+  .fms-item:hover{ background: rgba(0,0,0,.03); }
+  .fms-item input[type="checkbox"]{ width:16px; height:16px; accent-color: var(--gold); cursor:pointer; flex-shrink:0; }
+
   .overlay{
     position:fixed; inset:0; background: rgba(15,25,20,.55); backdrop-filter: blur(2px);
     display:flex; align-items:center; justify-content:center; z-index:50; padding:16px;
@@ -386,6 +401,10 @@
     .bestseller-wrap{ justify-content:center; text-align:center; }
     .bestseller-info{ min-width:100%; }
     .legend-row{ justify-content:center; }
+
+    .color-row input{ font-size:16px; }
+    .fms-item{ min-height:40px; }
+    .fms-filter{ font-size:16px; }
   }
 
   @media (max-width:400px){
