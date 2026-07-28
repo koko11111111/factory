@@ -16,19 +16,39 @@
     --stitch: #C9BC97;
     --radius: 10px;
     --shadow: 0 10px 30px rgba(0,0,0,.28);
+
+    /* page background ("cutting mat") — kept separate from --mat so it can
+       switch for light mode while the brand header/lock screen stay on the
+       same dark-green brand look in both themes */
+    --page-bg: #17352A;
+    --page-line: rgba(233,190,88,.10);
+    --page-line-strong: rgba(233,190,88,.18);
+    --page-fg: var(--paper);
+  }
+  .boot-loading{ color: var(--page-fg); padding:60px 0; text-align:center; }
+  /* ---------- light theme ---------- */
+  [data-theme="light"]{
+    --page-bg: #DCD3B4;
+    --page-line: rgba(107,98,80,.09);
+    --page-line-strong: rgba(107,98,80,.18);
+    --paper: #FFFFFF;
+    --paper-2: #F1E9D2;
+    --shadow: 0 8px 24px rgba(36,31,22,.14);
+    --page-fg: var(--ink);
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
   body{
-    background-color: var(--mat);
+    background-color: var(--page-bg);
     background-image:
-      repeating-linear-gradient(0deg, var(--mat-line) 0 1px, transparent 1px 40px),
-      repeating-linear-gradient(90deg, var(--mat-line) 0 1px, transparent 1px 40px),
-      repeating-linear-gradient(0deg, var(--mat-line-strong) 0 1.5px, transparent 1.5px 200px),
-      repeating-linear-gradient(90deg, var(--mat-line-strong) 0 1.5px, transparent 1.5px 200px);
+      repeating-linear-gradient(0deg, var(--page-line) 0 1px, transparent 1px 40px),
+      repeating-linear-gradient(90deg, var(--page-line) 0 1px, transparent 1px 40px),
+      repeating-linear-gradient(0deg, var(--page-line-strong) 0 1.5px, transparent 1.5px 200px),
+      repeating-linear-gradient(90deg, var(--page-line-strong) 0 1.5px, transparent 1.5px 200px);
     color: var(--ink);
     font-family: 'IBM Plex Sans Arabic', 'Tahoma', sans-serif;
     min-height: 100vh;
+    transition: background-color .2s;
   }
   .mono{ font-family:'IBM Plex Mono','IBM Plex Sans Arabic',monospace; }
   .display{ font-family:'Tajawal','IBM Plex Sans Arabic', sans-serif; font-weight:800; }
@@ -116,7 +136,7 @@
   .ticket-perf{ position:relative; height:0; border-top:2px dashed var(--stitch); }
   .ticket-perf::before, .ticket-perf::after{
     content:""; position:absolute; top:-9px; width:18px; height:18px; border-radius:50%;
-    background: var(--mat);
+    background: var(--page-bg);
   }
   .ticket-perf::before{ left:-9px; }
   .ticket-perf::after{ right:-9px; }
