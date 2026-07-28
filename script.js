@@ -18,6 +18,7 @@
   let historyModal = null; // customer name (string) whose history is being viewed, or null
   let historyContextOrderId = null; // if opened from a specific order, highlight it as "current" in the list
   let searchQuery = "";
+  let showCompletedOrders = false; // Orders tab: toggle to reveal completed/archived orders
 
   // ---------- password lock / cross-device sync ----------
   let authState = "checking"; // checking | needsSetup | needsLogin | unlocked
@@ -882,20 +883,22 @@
 
   function ordersHtml(){
     const completedCount = state.orders.filter(o=>orderProgress(o).complete).length;
-    const list = state.orders.filter(o => !orderProgress(o).complete && matches(o.name));
+    const base = showCompletedOrders ? state.orders : state.orders.filter(o => !orderProgress(o).complete);
+    const list = base.filter(o => matches(o.name));
     return `
     <div class="toolbar">
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
+      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?'🙈 إخفاء المكتملة':'✅ إظهار المكتملة'} (${completedCount})</button>` : ''}
       ${completedCount>0 ? `<button class="btn ghost" data-action="openCustomerLookup" title="دور على طلبيات وسجل عميل معين، حتى لو كل طلباته مكتملة">🕘 سجل عميل</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
-    ${completedCount>0 ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة اتنقلت لسجل العملاء تلقائيًا ومش هتظهر هنا — دورلها من "🕘 سجل عميل" فوق.</div>` : ''}
+    ${completedCount>0 && !showCompletedOrders ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة متخبية دلوقتي — دوس "إظهار المكتملة" فوق عشان تشوفها، أو "🕘 سجل عميل" عشان تدورلها باسم العميل.</div>` : ''}
     ${state.orders.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('📦','لا توجد طلبات بعد. أنشئ أول طلبية من الزر أعلاه.')}</div></div>` :
-      list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد طلبات نشطة مطابقة')}</div></div>` :
+      list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد طلبات مطابقة')}</div></div>` :
       list.slice().reverse().map(o=>{
         const pr = orderProgress(o);
-        return `<div class="ticket mini order-card" data-open-order="${o.id}">
+        return `<div class="ticket mini order-card${pr.complete?' archived':''}" data-open-order="${o.id}">
           <div class="ticket-stub">
             <div>
               <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span> ${orderDueBadge(o, pr)}</h2>
@@ -1529,6 +1532,7 @@
         else if(action==='openCustomerHistory'){ const o = orderById(id); if(o){ historyModal = o.name; historyContextOrderId = id; } render(); }
         else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
+        else if(action==='addOrderForCustomer'){ const customerName = el.getAttribute('data-name'); historyModal = null; historyContextOrderId = null; modalAddOrder(customerName); }
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
         else if(action==='confirmNo'){ confirmTarget=null; render(); }
         else if(action==='openChangePassword'){ changePasswordModal=true; changePasswordError=''; render(); }
