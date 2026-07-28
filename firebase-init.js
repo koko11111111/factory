@@ -14,7 +14,7 @@ import {
   initializeApp
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
 import {
-  getAuth, setPersistence, browserLocalPersistence,
+  getAuth, setPersistence, inMemoryPersistence,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   onAuthStateChanged, signOut, updatePassword,
   EmailAuthProvider, reauthenticateWithCredential
@@ -38,7 +38,10 @@ const app = initializeApp(cfg);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-setPersistence(auth, browserLocalPersistence).catch(()=>{});
+// inMemoryPersistence: nothing is written to the browser's storage, so every
+// time the page is opened (or reloaded), the sign-in state is gone and the
+// password screen shows up again — "ask for the password every time".
+setPersistence(auth, inMemoryPersistence).catch(()=>{});
 try{ enableIndexedDbPersistence(db); }catch(e){ /* multiple tabs open, fine */ }
 
 // One fixed account for the whole workshop. Not shown to the user anywhere.

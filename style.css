@@ -167,6 +167,9 @@
   .badge.ok{ background: rgba(47,111,107,.14); color: var(--teal-deep); }
   .badge.done{ background: rgba(47,111,107,.16); color: var(--teal-deep); }
   .badge.active{ background: rgba(217,164,65,.22); color: var(--gold-deep); }
+  .badge.due{ background: rgba(47,111,107,.14); color: var(--teal-deep); font-weight:600; }
+  .badge.overdue{ background: rgba(193,68,46,.16); color: var(--red-deep); font-weight:700; animation: pulseOverdue 2.2s ease-in-out infinite; }
+  @keyframes pulseOverdue{ 0%,100%{ opacity:1; } 50%{ opacity:.6; } }
 
   .swatch{ display:inline-block; width:14px; height:14px; border-radius:4px; border:1px solid rgba(0,0,0,.25); vertical-align:-2px; margin-left:6px; }
 
@@ -176,6 +179,10 @@
   .progress{ background: var(--paper-2); border-radius:999px; height:10px; overflow:hidden; position:relative; }
   .progress > div{ height:100%; background: var(--teal); border-radius:999px; transition:width .25s; }
   .progress.sold > div{ background: var(--gold); }
+  .progress.overdue > div{ background: var(--red); }
+
+  .order-card.archived{ opacity:.72; }
+  .done-notice{ background: rgba(47,111,107,.1); color: var(--teal-deep); border-radius:8px; padding:10px 14px; font-size:13.5px; margin-bottom:16px; }
 
   /* ---------- forms / modal ---------- */
   .field{ margin-bottom:12px; }

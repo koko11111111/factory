@@ -16,6 +16,7 @@
   let modal = null; // {title, fields, submitLabel, onSubmit}
   let confirmTarget = null; // {message, onConfirm}
   let historyModal = null; // orderId of the order whose customer history is being viewed
+  let showCompletedOrders = false; // completed orders are hidden from the main list by default; toggle reveals them
   let searchQuery = "";
 
   // ---------- password lock / cross-device sync ----------
@@ -524,6 +525,7 @@
 
   function topbarHtml(){
     const low = state.fabrics.filter(f => fabricRemaining(f) < LOW_STOCK_METERS && fabricRemaining(f) >= 0).length;
+    const overdue = overdueOrders().length;
     return `
     <div class="topbar">
       <div class="brand">
@@ -540,6 +542,7 @@
         <div class="qstat"><b>${fmt(totalSoldPieces())}</b><span>قطعة مباعة</span></div>
         <div class="qstat"><b>${activeOrders().length}</b><span>طلبية نشطة</span></div>
         <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
+        ${overdue>0 ? `<div class="qstat"><b style="color:#C1442E">${overdue}</b><span>طلبية متأخرة ⚠️</span></div>` : ''}
         ${currentUid ? `
         <button class="btn ghost sm icon-only" data-action="openChangePassword" title="تغيير كلمة السر" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔑</button>
         <button class="btn ghost sm icon-only" data-action="lockApp" title="قفل" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔒</button>` : ''}
@@ -632,9 +635,9 @@
 
   function dashboardHtml(){
     const lowFabrics = state.fabrics.filter(f=>fabricRemaining(f) < LOW_STOCK_METERS);
-    const act = activeOrders();
+    const act = activeOrders().slice().sort((a,b) => (isOrderOverdue(b)?1:0) - (isOrderOverdue(a)?1:0));
     const rev = totalRevenue();
-    const best = bestSellerStats();
+    const ratio = productSalesRatio();
     return `
     <div class="ticket">
       <div class="ticket-stub"><h2 class="ticket-title">القماش المنخفض</h2></div>
@@ -656,31 +659,32 @@
       <div class="ticket-body">
       ${act.length===0 ? emptyHtml('📦','لا توجد طلبات نشطة الآن') : act.slice(0,4).map(o=>{
         const pr = orderProgress(o);
+        const overdue = isOrderOverdue(o);
         return `<div style="margin-bottom:14px;">
-          <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px;">
-            <b>${escapeHtml(o.name)}</b><span class="muted mono">${pr.produced}/${pr.ordered}</span>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;margin-bottom:5px;gap:8px;">
+            <b>${escapeHtml(o.name)} ${orderDueBadge(o, pr)}</b><span class="muted mono">${pr.produced}/${pr.ordered}</span>
           </div>
-          <div class="progress"><div style="width:${pr.pct}%"></div></div>
+          <div class="progress${overdue?' overdue':''}"><div style="width:${pr.pct}%"></div></div>
         </div>`;
       }).join('')}
       </div>
     </div>
 
     <div class="ticket">
-      <div class="ticket-stub"><h2 class="ticket-title">🏆 الأكثر مبيعًا</h2></div>
+      <div class="ticket-stub"><h2 class="ticket-title">📊 نسبة مبيعات المنتجات</h2></div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
-      ${!best ? emptyHtml('📊','لا توجد مبيعات مسجّلة بعد. سجّل مبيعات في الطلبات عشان يظهر هنا أكتر منتج بيتباع.') : `
+      ${!ratio ? emptyHtml('📊','لا توجد مبيعات مسجّلة بعد. سجّل مبيعات في الطلبات عشان تظهر هنا نسبة كل منتج.') : `
       <div class="bestseller-wrap">
-        <div class="bestseller-wheel">${donutWheelSvg(best)}</div>
+        <div class="bestseller-wheel">${donutWheelSvg(ratio)}</div>
         <div class="bestseller-info">
-          <div class="bestseller-name">${escapeHtml(best.name)}${best.cut ? ' — '+escapeHtml(best.cut) : ''}</div>
-          <div class="muted" style="font-size:13px;margin-bottom:10px;">${fmt(best.total)} قطعة مباعة إجمالاً (كل الألوان)${best.colors.length>1 ? ` · اللون الأكثر مبيعًا: ${escapeHtml(best.colors[0].color)}` : ''}</div>
+          <div class="bestseller-name">الأكثر مبيعًا: ${escapeHtml(ratio.items[0].label)} (${ratio.items[0].pct}%)</div>
+          <div class="muted" style="font-size:13px;margin-bottom:10px;">${fmt(ratio.total)} قطعة مباعة إجمالاً على كل المنتجات</div>
           <div class="bestseller-legend">
-          ${best.colors.map(c=>`<div class="legend-row">
-            <span class="swatch" style="background:${colorSwatch(c.color)}"></span>
-            <span class="legend-label">${escapeHtml(c.color)}</span>
-            <span class="legend-num mono">${fmt(c.sold)} <span class="muted">(${c.pct}%)</span></span>
+          ${ratio.items.map(it=>`<div class="legend-row">
+            <span class="swatch" style="background:${it.color}"></span>
+            <span class="legend-label">${escapeHtml(it.label)}</span>
+            <span class="legend-num mono">${fmt(it.sold)} <span class="muted">(${it.pct}%)</span></span>
           </div>`).join('')}
           </div>
         </div>
@@ -700,7 +704,14 @@
   }
 
   // ---------- best seller stats (top product by units sold, broken down by fabric color) ----------
-  function bestSellerStats(){
+  const WHEEL_PALETTE = ['#D9A441','#2F6F6B','#C1442E','#1F4335','#B5822A','#24534F','#9C3423','#C9BC97'];
+  function wheelColorFor(idx){
+    if(idx < WHEEL_PALETTE.length) return WHEEL_PALETTE[idx];
+    return `hsl(${(idx * 47) % 360}, 50%, 45%)`; // extra distinct colors once the fixed palette runs out
+  }
+
+  // Ratio of units sold across ALL products (grouped by name+cut so color variants roll up together).
+  function productSalesRatio(){
     const soldByProduct = new Map(); // productId -> total sold across all orders
     state.orders.forEach(o => o.items.forEach(it => {
       const s = Number(it.sold) || 0;
@@ -709,45 +720,46 @@
     }));
     if(soldByProduct.size === 0) return null;
 
-    // group by name+cut so color variants of "the same product" roll up together
-    const groups = new Map(); // key -> {name, cut, total, colors: Map(colorLabel -> sold)}
+    const groups = new Map(); // key -> {label, sold}
     soldByProduct.forEach((sold, productId) => {
       const p = productById(productId);
       if(!p) return; // product was deleted since; its historical sales aren't attributable anymore
       const key = (p.name||'').trim().toLowerCase() + '||' + (p.cut||'').trim().toLowerCase();
-      if(!groups.has(key)) groups.set(key, { name: p.name, cut: p.cut, total: 0, colors: new Map() });
-      const g = groups.get(key);
-      g.total += sold;
-      const f = p.fabricId ? fabricById(p.fabricId) : null;
-      const colorLabel = f ? f.color.trim() : 'بدون قماش محدد';
-      g.colors.set(colorLabel, (g.colors.get(colorLabel) || 0) + sold);
+      if(!groups.has(key)) groups.set(key, { label: p.name + (p.cut ? ' — '+p.cut : ''), sold: 0 });
+      groups.get(key).sold += sold;
     });
     if(groups.size === 0) return null;
 
-    let top = null;
-    groups.forEach(g => { if(!top || g.total > top.total) top = g; });
-    if(!top || top.total <= 0) return null;
+    let arr = Array.from(groups.values()).sort((a,b) => b.sold - a.sold);
+    const total = arr.reduce((s,g) => s+g.sold, 0);
+    if(total <= 0) return null;
 
-    const colors = Array.from(top.colors.entries())
-      .map(([color, sold]) => ({ color, sold, pct: Math.round(sold / top.total * 100) }))
-      .sort((a,b) => b.sold - a.sold);
+    // cap the wheel at 7 individual slices + an "أخرى" bucket, so a shop with many products stays readable
+    const MAX_SLICES = 7;
+    if(arr.length > MAX_SLICES){
+      const top = arr.slice(0, MAX_SLICES);
+      const restSold = arr.slice(MAX_SLICES).reduce((s,g) => s+g.sold, 0);
+      top.push({ label: 'أخرى', sold: restSold });
+      arr = top;
+    }
 
-    return { name: top.name, cut: top.cut, total: top.total, colors };
+    const items = arr.map((g,idx) => ({ label: g.label, sold: g.sold, pct: Math.round(g.sold/total*100), color: wheelColorFor(idx) }));
+    return { total, items };
   }
 
-  // Donut "wheel": ring segments sized by color share, total sold count in the middle.
+  // Donut "wheel": ring segments sized by each item's share, total units in the middle.
   function donutWheelSvg(stats){
     const size = 160, r = 60, cx = 80, cy = 80, strokeW = 22;
     const circumference = 2 * Math.PI * r;
     let acc = 0;
-    const segs = stats.colors.map(c => {
-      const len = Math.max(0, (c.sold / stats.total) * circumference);
+    const segs = stats.items.map(it => {
+      const len = Math.max(0, (it.sold / stats.total) * circumference);
       const dash = `${len} ${Math.max(0, circumference - len)}`;
-      const circle = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colorSwatch(c.color)}" stroke-width="${strokeW}" stroke-dasharray="${dash}" stroke-dashoffset="${-acc}" transform="rotate(-90 ${cx} ${cy})"><title>${escapeHtml(c.color)}: ${c.sold} (${c.pct}%)</title></circle>`;
+      const circle = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${it.color}" stroke-width="${strokeW}" stroke-dasharray="${dash}" stroke-dashoffset="${-acc}" transform="rotate(-90 ${cx} ${cy})"><title>${escapeHtml(it.label)}: ${it.sold} (${it.pct}%)</title></circle>`;
       acc += len;
       return circle;
     }).join('');
-    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="توزيع الألوان في أكثر منتج مبيعًا">
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="نسبة مبيعات المنتجات">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(0,0,0,.07)" stroke-width="${strokeW}"></circle>
       ${segs}
       <circle cx="${cx}" cy="${cy}" r="${r - strokeW/2 - 5}" fill="var(--paper)"></circle>
@@ -859,22 +871,33 @@
     </div>`;
   }
 
+  function orderDueBadge(o, pr){
+    if(pr.complete) return '';
+    if(!o.dueDate) return '';
+    const overdue = isOrderOverdue(o);
+    return `<span class="badge ${overdue?'overdue':'due'}">${overdue?'⚠️ ':'📅 '}${escapeHtml(daysDiffLabel(o.dueDate))}</span>`;
+  }
+
   function ordersHtml(){
-    const list = state.orders.filter(o => matches(o.name));
+    const completedCount = state.orders.filter(o=>orderProgress(o).complete).length;
+    const visible = state.orders.filter(o => showCompletedOrders || !orderProgress(o).complete);
+    const list = visible.filter(o => matches(o.name));
     return `
     <div class="toolbar">
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
+      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders">${showCompletedOrders ? '🔼 إخفاء المكتملة' : `📁 عرض المكتملة (${completedCount})`}</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
+    ${!showCompletedOrders && completedCount>0 ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة اتخبّت من هنا تلقائيًا — لسه موجودة في سجل العميل (🕘 سجل العميل) أو اضغط "عرض المكتملة".</div>` : ''}
     ${state.orders.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('📦','لا توجد طلبات بعد. أنشئ أول طلبية من الزر أعلاه.')}</div></div>` :
       list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد نتائج مطابقة للبحث')}</div></div>` :
       list.slice().reverse().map(o=>{
         const pr = orderProgress(o);
-        return `<div class="ticket mini order-card" data-open-order="${o.id}">
+        return `<div class="ticket mini order-card${pr.complete?' archived':''}" data-open-order="${o.id}">
           <div class="ticket-stub">
             <div>
-              <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span></h2>
+              <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span> ${orderDueBadge(o, pr)}</h2>
               <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span><span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')} · ${o.items.length} صنف</span></div>
             </div>
             <button class="btn red sm icon-only" data-action="deleteOrder" data-id="${o.id}" title="حذف الطلبية" onclick="event.stopPropagation()">✕</button>
@@ -893,13 +916,19 @@
     const o = orderById(activeOrderId);
     if(!o){ view='orders'; return ordersHtml(); }
     const pr = orderProgress(o);
+    const overdue = isOrderOverdue(o);
     return `
     <button class="back-link" data-nav="orders">→ رجوع للطلبات</button>
     <div class="ticket">
       <div class="ticket-stub">
         <div>
           <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span></h2>
-          <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span><span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')}</span></div>
+          <div class="ticket-meta">
+            <span class="ticket-serial">${serialFor('ORD', o.id)}</span>
+            <span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')}</span>
+            ${o.dueDate ? `<span class="muted" style="font-size:12px;">· التسليم: ${escapeHtml(o.dueDate)}</span> <span class="badge ${overdue?'overdue':(pr.complete?'':'due')}">${pr.complete?'✔️ اتسلمت':(overdue?'⚠️ ':'📅 ')+daysDiffLabel(o.dueDate)}</span>` : ''}
+            <button class="btn ghost sm icon-only" data-action="editOrder" data-id="${o.id}" title="تعديل بيانات الطلبية">✏️</button>
+          </div>
         </div>
         <div class="btn-group-wrap">
           <button class="btn ghost sm" data-action="openCustomerHistory" data-id="${o.id}" title="سجل هذا العميل مع كل طلباته">🕘 سجل العميل</button>
@@ -908,6 +937,8 @@
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
+
+      ${pr.complete ? `<div class="done-notice">✅ الطلبية دي مكتملة — هتلاقيها في سجل العميل، مش في قائمة الطلبات.</div>` : ''}
 
       <div class="field-row" style="margin-bottom:18px;">
         <div>
@@ -1458,6 +1489,8 @@
         else if(action==='editProduct') modalEditProduct(productById(id));
         else if(action==='deleteProduct') askConfirm('هل تريد حذف هذا المنتج؟', ()=>deleteProduct(id));
         else if(action==='addOrder') modalAddOrder();
+        else if(action==='editOrder'){ const o = orderById(id); if(o) modalEditOrder(o); }
+        else if(action==='toggleCompletedOrders'){ showCompletedOrders = !showCompletedOrders; render(); }
         else if(action==='deleteOrder') askConfirm('سيتم حذف الطلبية وكل أصنافها. متأكد؟', ()=>deleteOrder(id));
         else if(action==='addOrderItem') modalAddOrderItem(id);
         else if(action==='deleteOrderItem') deleteOrderItem(el.getAttribute('data-order'), el.getAttribute('data-item'));
