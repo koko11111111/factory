@@ -284,7 +284,6 @@
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
-    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const ordered = Number(vals.ordered)||0;
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
@@ -953,13 +952,11 @@
         </div>
         <div class="btn-group-wrap">
           <button class="btn ghost sm" data-action="openCustomerHistory" data-id="${o.id}" title="سجل هذا العميل مع كل طلباته">🕘 سجل العميل</button>
-          ${pr.complete ? '' : `<button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>`}
+          <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
         </div>
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
-
-      ${pr.complete ? `<div class="done-notice">✅ الطلبية دي مكتملة ومقفولة للتعديل — نفس الأرقام دي هتلاقيها في سجل العميل. لو فيه غلطة، افتحها من "📁 عرض المكتملة" في قائمة الطلبات.</div>` : ''}
 
       <div class="field-row" style="margin-bottom:18px;">
         <div>
