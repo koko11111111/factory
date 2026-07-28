@@ -20,6 +20,21 @@
   let searchQuery = "";
   let showCompletedOrders = false; // Orders tab: toggle to reveal completed/archived orders
 
+  // ---------- sorting (fabrics/products tables) ----------
+  let sortState = { fabrics: {by:'', dir:1}, products: {by:'', dir:1} };
+
+  // ---------- bulk selection (fabrics/products/orders) ----------
+  let selection = { fabrics: new Set(), products: new Set(), orders: new Set() };
+  let bulkMode = { fabrics:false, products:false, orders:false };
+
+  // ---------- orders date-range filter ----------
+  let orderDateFilter = 'all'; // all | month | 30 | 90
+
+  // ---------- theme (device-local display preference, not synced across devices) ----------
+  const THEME_KEY = "factory-theme";
+  let theme = 'dark';
+  try{ theme = localStorage.getItem(THEME_KEY) || 'dark'; }catch(e){}
+
   // ---------- password lock / cross-device sync ----------
   let authState = "checking"; // checking | needsSetup | needsLogin | unlocked
   let authError = "";
@@ -57,6 +72,7 @@
   }
 
   async function boot(){
+    document.documentElement.setAttribute('data-theme', theme);
     // show cached local data instantly (if any) while we check auth in the background
     try{
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -195,9 +211,10 @@
       if(existing){
         existing.total = (Number(existing.total)||0) + row.qty;
         if(vals.image) existing.image = vals.image;
+        existing.updatedAt = Date.now();
         mergedCount++;
       } else {
-        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: vals.image || null });
+        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: vals.image || null, updatedAt: Date.now() });
         addedCount++;
       }
     });
@@ -213,6 +230,7 @@
     if(!f) return;
     f.code = vals.code.trim(); f.color = vals.color.trim(); f.total = Number(vals.qty)||0;
     f.image = vals.image || null;
+    f.updatedAt = Date.now();
     save(); showToast("تم تعديل القماش"); render();
   }
   function deleteFabric(id){
@@ -234,7 +252,8 @@
       readyQty: hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0,
       metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
       price: vals.price ? Number(vals.price) : null,
-      image: vals.image || null
+      image: vals.image || null,
+      updatedAt: Date.now()
     };
     if(!usesFabric){
       state.products.push({ id: uid(), ...base, fabricId: null });
@@ -256,6 +275,7 @@
     p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
     p.price = vals.price ? Number(vals.price) : null;
     p.image = vals.image || null;
+    p.updatedAt = Date.now();
     save(); showToast("تم تعديل المنتج"); render();
   }
   function deleteProduct(id){
@@ -263,6 +283,18 @@
     if(used){ showToast("لا يمكن حذف منتج مستخدم في طلبية"); return; }
     state.products = state.products.filter(p=>p.id!==id);
     save(); showToast("تم حذف المنتج"); render();
+  }
+  // duplicate/clone a product for near-identical variants (same cut, different color) —
+  // copies everything except readyQty (starts at 0) and opens the edit modal so you can
+  // tweak the name/color/fabric before saving.
+  function duplicateProduct(id){
+    const p = productById(id);
+    if(!p) return;
+    const clone = { ...p, id: uid(), readyQty: 0, updatedAt: Date.now() };
+    state.products.push(clone);
+    save(); render();
+    modalEditProduct(clone);
+    showToast("اتنسخ المنتج — عدّل البيانات المختلفة واحفظ");
   }
 
   function addOrder(vals){
@@ -336,6 +368,127 @@
       it.ordered = num;
     }
     save(); render();
+  }
+
+  // ---------- sorting ----------
+  function toggleSort(kind, by){
+    const s = sortState[kind];
+    if(s.by === by) s.dir = -s.dir;
+    else { s.by = by; s.dir = 1; }
+    render();
+  }
+  function applySort(kind, list, accessors){
+    const s = sortState[kind];
+    if(!s.by || !accessors[s.by]) return list;
+    const get = accessors[s.by];
+    return list.slice().sort((a,b)=>{
+      const va = get(a), vb = get(b);
+      if(typeof va === 'string') return va.localeCompare(vb, 'ar') * s.dir;
+      return (va - vb) * s.dir;
+    });
+  }
+  function sortArrow(kind, by){
+    const s = sortState[kind];
+    if(s.by !== by) return '';
+    return s.dir===1 ? ' ▲' : ' ▼';
+  }
+
+  // ---------- CSV export ----------
+  function csvEscape(v){
+    const s = String(v===null||v===undefined ? '' : v);
+    if(/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+    return s;
+  }
+  function downloadCsv(filename, rows){
+    const csv = "\uFEFF" + rows.map(row => row.map(csvEscape).join(',')).join('\r\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }
+  function exportFabricsCsv(){
+    const rows = [['الكود','اللون','الإجمالي','المستخدم','المتبقي']];
+    state.fabrics.forEach(f => rows.push([f.code, f.color, fmt(f.total), fmt(f.used), fmt(fabricRemaining(f))]));
+    downloadCsv('fabrics.csv', rows);
+  }
+  function exportProductsCsv(){
+    const rows = [['الرقم','الاسم','القصة','الجاهز عندك','القماش','متر/قطعة','السعر']];
+    state.products.forEach(p=>{
+      const f = fabricById(p.fabricId);
+      rows.push([p.code||'', p.name, p.cut, fmt(p.readyQty), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
+    });
+    downloadCsv('products.csv', rows);
+  }
+  function exportOrdersCsv(){
+    const rows = [['اسم الطلبية','التاريخ','تاريخ التسليم','المنتج','مطلوب','منتَج','مباع']];
+    state.orders.forEach(o=>{
+      if(o.items.length===0){ rows.push([o.name, o.date||'', o.dueDate||'', '', '', '', '']); return; }
+      o.items.forEach(it=>{
+        const p = productById(it.productId);
+        rows.push([o.name, o.date||'', o.dueDate||'', p ? p.name+' - '+p.cut : '', it.ordered, it.produced, it.sold]);
+      });
+    });
+    downloadCsv('orders.csv', rows);
+  }
+
+  // ---------- theme ----------
+  function toggleTheme(){
+    theme = (theme==='dark') ? 'light' : 'dark';
+    try{ localStorage.setItem(THEME_KEY, theme); }catch(e){}
+    document.documentElement.setAttribute('data-theme', theme);
+    render();
+  }
+
+  // ---------- bulk selection / bulk delete ----------
+  function toggleBulkMode(kind){
+    bulkMode[kind] = !bulkMode[kind];
+    selection[kind].clear();
+    render();
+  }
+  function toggleSelected(kind, id){
+    if(selection[kind].has(id)) selection[kind].delete(id);
+    else selection[kind].add(id);
+    render();
+  }
+  function toggleSelectAll(kind, ids){
+    const all = ids.every(id => selection[kind].has(id));
+    if(all) ids.forEach(id => selection[kind].delete(id));
+    else ids.forEach(id => selection[kind].add(id));
+    render();
+  }
+  function bulkDeleteFabrics(){
+    const ids = Array.from(selection.fabrics);
+    if(ids.length===0) return;
+    const blocked = ids.filter(id => state.products.some(p=>p.fabricId===id));
+    const toDelete = ids.filter(id => !blocked.includes(id));
+    state.fabrics = state.fabrics.filter(f => !toDelete.includes(f.id));
+    selection.fabrics.clear();
+    save();
+    showToast(blocked.length ? `اتحذف ${toDelete.length}، وتعذر حذف ${blocked.length} (مستخدم في منتج)` : `اتحذف ${toDelete.length} قماش`);
+    render();
+  }
+  function bulkDeleteProducts(){
+    const ids = Array.from(selection.products);
+    if(ids.length===0) return;
+    const blocked = ids.filter(id => state.orders.some(o=>o.items.some(it=>it.productId===id)));
+    const toDelete = ids.filter(id => !blocked.includes(id));
+    state.products = state.products.filter(p => !toDelete.includes(p.id));
+    selection.products.clear();
+    save();
+    showToast(blocked.length ? `اتحذف ${toDelete.length}، وتعذر حذف ${blocked.length} (مستخدم في طلبية)` : `اتحذف ${toDelete.length} منتج`);
+    render();
+  }
+  function bulkDeleteOrders(){
+    const ids = Array.from(selection.orders);
+    if(ids.length===0) return;
+    state.orders = state.orders.filter(o => !ids.includes(o.id));
+    if(ids.includes(activeOrderId)){ activeOrderId=null; view='orders'; }
+    selection.orders.clear();
+    save();
+    showToast(`اتحذفت ${ids.length} طلبية`);
+    render();
   }
 
   function setFactoryName(name){
@@ -545,6 +698,7 @@
         <div class="qstat"><b>${activeOrders().length}</b><span>طلبية نشطة</span></div>
         <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
         ${overdue>0 ? `<div class="qstat"><b style="color:#C1442E">${overdue}</b><span>طلبية متأخرة ⚠️</span></div>` : ''}
+        <button class="btn ghost sm icon-only" data-action="toggleTheme" title="${theme==='dark'?'وضع فاتح':'وضع غامق'}" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${theme==='dark'?'☀️':'🌙'}</button>
         ${currentUid ? `
         <button class="btn ghost sm icon-only" data-action="openChangePassword" title="تغيير كلمة السر" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔑</button>
         <button class="btn ghost sm icon-only" data-action="lockApp" title="قفل" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔒</button>` : ''}
@@ -777,7 +931,17 @@
     if(matchActive){
       matchMap = new Map(imageMatchResults.fabrics.map(r=>[r.id, r.pct]));
       list = list.filter(f => matchMap.has(f.id)).sort((a,b)=> matchMap.get(b.id) - matchMap.get(a.id));
+    } else {
+      list = applySort('fabrics', list, {
+        code: f => (f.code||'').toLowerCase(),
+        color: f => (f.color||'').toLowerCase(),
+        remaining: f => fabricRemaining(f),
+        updated: f => Number(f.updatedAt)||0
+      });
     }
+    const bulk = bulkMode.fabrics;
+    const ids = list.map(f=>f.id);
+    const allSelected = ids.length>0 && ids.every(id=>selection.fabrics.has(id));
     return `
     <div class="ticket">
       <div class="ticket-stub">
@@ -785,20 +949,35 @@
           <h2 class="ticket-title">الأقمشة</h2>
           <div class="ticket-meta"><span class="ticket-serial">${serialFor('STK', state.fabrics.length)}</span><span class="barcode"></span></div>
         </div>
-        <button class="btn gold" data-action="addFabric">+ إضافة قماش</button>
+        <div class="btn-group-wrap">
+          ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="exportFabricsCsv">⬇️ تصدير CSV</button>` : ''}
+          ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="fabrics">${bulk?'إلغاء التحديد':'✓ تحديد متعدد'}</button>` : ''}
+          <button class="btn gold" data-action="addFabric">+ إضافة قماش</button>
+        </div>
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
       <div class="section-note">كل صف يمثل كود قماش ولون معيّن، والمتبقي يُحسب تلقائيًا عند الإنتاج.</div>
       ${state.fabrics.length>0 ? searchRowHtml('ابحث بالكود أو اللون...') + imageMatchControlsHtml('fabrics') : ''}
+      ${bulk && selection.fabrics.size>0 ? `<div class="bulk-bar">محدد: ${selection.fabrics.size} <button class="btn red sm" data-action="bulkDeleteFabrics">🗑️ حذف المحدد</button></div>` : ''}
       ${state.fabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش مسجل بعد. أضف أول رصيد من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <div class="table-scroll"><table><thead><tr><th></th><th>الكود</th><th>اللون</th><th>الإجمالي</th><th>المستخدم</th><th>المتبقي</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr>
+        ${bulk?`<th><input type="checkbox" data-select-all="fabrics" data-ids='${JSON.stringify(ids)}' ${allSelected?'checked':''}></th>`:''}
+        <th></th>
+        <th class="sortable" data-sort="fabrics:code">الكود${sortArrow('fabrics','code')}</th>
+        <th class="sortable" data-sort="fabrics:color">اللون${sortArrow('fabrics','color')}</th>
+        <th>الإجمالي</th><th>المستخدم</th>
+        <th class="sortable" data-sort="fabrics:remaining">المتبقي${sortArrow('fabrics','remaining')}</th>
+        ${matchActive?'<th>تطابق الصورة</th>':''}
+        <th class="sortable" data-sort="fabrics:updated">آخر تحديث${sortArrow('fabrics','updated')}</th>
+        <th></th></tr></thead><tbody>
       ${list.map((f,idx)=>{
         const rem = fabricRemaining(f);
         const low = rem < LOW_STOCK_METERS;
         const pct = matchActive ? matchMap.get(f.id) : null;
         return `<tr>
+          ${bulk?`<td><input type="checkbox" data-select="fabrics:${f.id}" ${selection.fabrics.has(f.id)?'checked':''}></td>`:''}
           <td>${thumbHtml(f.image, f.code)}</td>
           <td>${escapeHtml(f.code)}</td>
           <td><span class="swatch" style="background:${colorSwatch(f.color)}"></span>${escapeHtml(f.color)}</td>
@@ -806,6 +985,7 @@
           <td class="num muted">${fmt(f.used)} م</td>
           <td class="num" style="${low?'color:#C1442E':''}">${fmt(rem)} م ${low?'<span class="badge low">منخفض</span>':''}</td>
           ${matchActive ? `<td><span class="badge match${idx===0?' best':''}">${pct}%</span></td>` : ''}
+          <td class="muted" style="font-size:12px;">${f.updatedAt ? new Date(f.updatedAt).toLocaleDateString('ar-EG') : '—'}</td>
           <td class="row-actions">
             <button class="btn ghost sm" data-action="editFabric" data-id="${f.id}">تعديل</button>
             <button class="btn red sm icon-only" data-action="deleteFabric" data-id="${f.id}" title="حذف">✕</button>
@@ -1345,6 +1525,32 @@
       searchEl.addEventListener('input', ()=>{ searchQuery = searchEl.value; renderPreserveFocus(); });
     }
 
+    app.querySelectorAll('[data-sort]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const [kind, by] = el.getAttribute('data-sort').split(':');
+        toggleSort(kind, by);
+      });
+    });
+    app.querySelectorAll('[data-select]').forEach(el=>{
+      el.addEventListener('change', (ev)=>{
+        ev.stopPropagation();
+        const [kind, id] = el.getAttribute('data-select').split(':');
+        toggleSelected(kind, id);
+      });
+      el.addEventListener('click', ev=> ev.stopPropagation());
+    });
+    app.querySelectorAll('[data-select-all]').forEach(el=>{
+      el.addEventListener('change', ()=>{
+        const kind = el.getAttribute('data-select-all');
+        const ids = JSON.parse(el.getAttribute('data-ids'));
+        toggleSelectAll(kind, ids);
+      });
+    });
+    const orderFilterEl = document.getElementById('orderDateFilter');
+    if(orderFilterEl){
+      orderFilterEl.addEventListener('change', ()=>{ orderDateFilter = orderFilterEl.value; render(); });
+    }
+
     app.querySelectorAll('[data-oi]').forEach(el=>{
       el.addEventListener('change', ()=>{
         updateOrderItemQty(el.getAttribute('data-order'), el.getAttribute('data-item'), el.getAttribute('data-oi'), el.value);
@@ -1509,6 +1715,15 @@
         else if(action==='addProduct') modalAddProduct();
         else if(action==='editProduct') modalEditProduct(productById(id));
         else if(action==='deleteProduct') askConfirm('هل تريد حذف هذا المنتج؟', ()=>deleteProduct(id));
+        else if(action==='duplicateProduct') duplicateProduct(id);
+        else if(action==='toggleTheme') toggleTheme();
+        else if(action==='toggleBulkMode') toggleBulkMode(el.getAttribute('data-kind'));
+        else if(action==='bulkDeleteFabrics') askConfirm('هل تريد حذف الأصناف المحددة؟', bulkDeleteFabrics);
+        else if(action==='bulkDeleteProducts') askConfirm('هل تريد حذف الأصناف المحددة؟', bulkDeleteProducts);
+        else if(action==='bulkDeleteOrders') askConfirm('هل تريد حذف الطلبات المحددة؟', bulkDeleteOrders);
+        else if(action==='exportFabricsCsv') exportFabricsCsv();
+        else if(action==='exportProductsCsv') exportProductsCsv();
+        else if(action==='exportOrdersCsv') exportOrdersCsv();
         else if(action==='addOrder') modalAddOrder();
         else if(action==='editOrder'){ const o = orderById(id); if(o) modalEditOrder(o); }
         else if(action==='toggleCompletedOrders'){ showCompletedOrders = !showCompletedOrders; render(); }
