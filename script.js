@@ -309,7 +309,7 @@
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
-    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); render(); return; }
+    if(field!=="sold" && orderProgress(o).complete){ showToast("الطلبية دي مكتملة الإنتاج، مينفعش تتعدل كمية الطلب/الإنتاج"); render(); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
