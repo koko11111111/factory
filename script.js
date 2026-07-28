@@ -1069,7 +1069,7 @@
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
       ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?'🔽 إخفاء المكتملة':'✅ إظهار المكتملة'} (${completedCount})</button>` : ''}
-      ${completedCount>0 ? `<button class="btn ghost" data-action="openCustomerLookup" title="دور على طلبيات وسجل عميل معين، حتى لو كل طلباته مكتملة">🕘 سجل عميل</button>` : ''}
+      ${state.orders.length>0 ? `<button class="btn ghost" data-action="openCustomerLookup" title="دور على طلبيات وسجل عميل معين">🕘 سجل عميل</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
     ${completedCount>0 && !showCompletedOrders ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة متخبية دلوقتي — دوس "إظهار المكتملة" فوق عشان تشوفها، أو "🕘 سجل عميل" عشان تدورلها باسم العميل.</div>` : ''}
