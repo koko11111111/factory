@@ -15,8 +15,8 @@
   let activeOrderId = null;
   let modal = null; // {title, fields, submitLabel, onSubmit}
   let confirmTarget = null; // {message, onConfirm}
-  let historyModal = null; // orderId of the order whose customer history is being viewed
-  let showCompletedOrders = false; // completed orders are hidden from the main list by default; toggle reveals them
+  let historyModal = null; // customer name (string) whose history is being viewed, or null
+  let historyContextOrderId = null; // if opened from a specific order, highlight it as "current" in the list
   let searchQuery = "";
 
   // ---------- password lock / cross-device sync ----------
@@ -448,13 +448,13 @@
       onSubmit: vals => editProduct(p.id, vals)
     });
   }
-  function modalAddOrder(){
+  function modalAddOrder(prefillName){
     const today = new Date().toISOString().slice(0,10);
     openModal({
       title: "طلبية جديدة",
       submitLabel: "إنشاء",
       fields: [
-        {key:'name', label:'اسم الطلبية / العميل', type:'text', required:true},
+        {key:'name', label:'اسم الطلبية / العميل', type:'text', required:true, value: prefillName||''},
         {key:'date', label:'التاريخ', type:'date', value:today, required:true},
         {key:'dueDate', label:'تاريخ التسليم المتوقع (اختياري)', type:'date', required:false}
       ],
@@ -883,21 +883,20 @@
 
   function ordersHtml(){
     const completedCount = state.orders.filter(o=>orderProgress(o).complete).length;
-    const visible = state.orders.filter(o => showCompletedOrders || !orderProgress(o).complete);
-    const list = visible.filter(o => matches(o.name));
+    const list = state.orders.filter(o => !orderProgress(o).complete && matches(o.name));
     return `
     <div class="toolbar">
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
-      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders">${showCompletedOrders ? '🔼 إخفاء المكتملة' : `📁 عرض المكتملة (${completedCount})`}</button>` : ''}
+      ${completedCount>0 ? `<button class="btn ghost" data-action="openCustomerLookup" title="دور على طلبيات وسجل عميل معين، حتى لو كل طلباته مكتملة">🕘 سجل عميل</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
-    ${!showCompletedOrders && completedCount>0 ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة اتخبّت من هنا تلقائيًا — لسه موجودة في سجل العميل (🕘 سجل العميل) أو اضغط "عرض المكتملة".</div>` : ''}
+    ${completedCount>0 ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة اتنقلت لسجل العملاء تلقائيًا ومش هتظهر هنا — دورلها من "🕘 سجل عميل" فوق.</div>` : ''}
     ${state.orders.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('📦','لا توجد طلبات بعد. أنشئ أول طلبية من الزر أعلاه.')}</div></div>` :
-      list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد نتائج مطابقة للبحث')}</div></div>` :
+      list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد طلبات نشطة مطابقة')}</div></div>` :
       list.slice().reverse().map(o=>{
         const pr = orderProgress(o);
-        return `<div class="ticket mini order-card${pr.complete?' archived':''}" data-open-order="${o.id}">
+        return `<div class="ticket mini order-card" data-open-order="${o.id}">
           <div class="ticket-stub">
             <div>
               <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span> ${orderDueBadge(o, pr)}</h2>
@@ -913,6 +912,25 @@
         </div>`;
       }).join('')}
     `;
+  }
+
+  function modalCustomerLookup(){
+    const names = Array.from(new Set(state.orders.map(o => (o.name||'').trim()).filter(Boolean)));
+    const options = names.sort((a,b)=>a.localeCompare(b,'ar')).map(n => ({ id:n, label:n }));
+    openModal({
+      title: "سجل عميل",
+      submitLabel: "عرض السجل",
+      fields: [
+        {key:'customerName', label:'اسم العميل', type:'searchselect', options, required:true, emptyMsg:'لا توجد طلبات بعد'}
+      ],
+      onSubmit: vals => {
+        if(!vals.customerName){ showToast("اختر عميل"); return; }
+        modal = null;
+        historyModal = vals.customerName;
+        historyContextOrderId = null;
+        render();
+      }
+    });
   }
 
   function orderDetailHtml(){
@@ -1150,19 +1168,19 @@
   }
 
   function customerHistoryHtml(){
-    const cur = orderById(historyModal);
-    if(!cur){ return ''; }
-    const name = (cur.name||'').trim();
+    const name = (historyModal||'').trim();
+    if(!name){ return ''; }
     const orders = customerOrders(name);
     return `<div class="overlay">
       <div class="modal" style="max-width:560px;">
         <button class="modal-close" data-action="closeHistoryModal">✕</button>
         <h3>🕘 سجل العميل: ${escapeHtml(name)}</h3>
         <div class="muted" style="font-size:12px;margin:-8px 0 14px;">${orders.length} طلبية بنفس الاسم</div>
-        <div style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+        <button class="btn gold sm" data-action="addOrderForCustomer" data-name="${escapeHtml(name)}" style="margin-bottom:14px;">+ طلبية جديدة لنفس العميل</button>
+        <div style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
         ${orders.length===0 ? emptyHtml('🕘','لا يوجد سجل سابق لهذا العميل') : orders.map(o=>{
           const pr = orderProgress(o);
-          const isCurrent = o.id === cur.id;
+          const isCurrent = o.id === historyContextOrderId;
           return `<div class="ticket mini" style="margin:0;${isCurrent?'border-color:var(--gold, #e9be58);':''}">
             <div class="ticket-stub">
               <div>
