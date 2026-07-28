@@ -176,7 +176,7 @@
     order.items.forEach(it=>{ ordered+=Number(it.ordered)||0; produced+=Number(it.produced)||0; sold+=Number(it.sold)||0; });
     const pct = ordered ? Math.min(100, Math.round(produced/ordered*100)) : 0;
     const soldPct = ordered ? Math.min(100, Math.round(sold/ordered*100)) : 0;
-    const complete = ordered>0 && produced>=ordered;
+    const complete = ordered>0 && produced>=ordered && sold>=ordered;
     return {ordered, produced, sold, pct, soldPct, complete};
   }
   function activeOrders(){
