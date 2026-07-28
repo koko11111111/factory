@@ -278,6 +278,8 @@
   .order-item-row:last-child{ border-bottom:none; }
   .order-item-row .mini-label{ font-size:11px; color:var(--ink-soft); display:block; margin-bottom:3px; }
   .order-item-row input{ width:100%; padding:6px 8px; border-radius:6px; border:1px solid var(--paper-2); font-family:'IBM Plex Mono'; font-size:14px; }
+  .order-item-row.readonly{ opacity:.85; }
+  .ro-value{ font-family:'IBM Plex Mono'; font-size:14px; font-weight:600; padding:6px 8px; }
   .order-item-name{ display:flex; align-items:center; gap:8px; min-width:0; }
   .order-item-name b{ overflow-wrap:anywhere; }
 

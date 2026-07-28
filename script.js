@@ -284,6 +284,7 @@
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const ordered = Number(vals.ordered)||0;
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
@@ -301,12 +302,14 @@
   function deleteOrderItem(orderId, itemId){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     o.items = o.items.filter(it=>it.id!==itemId);
     save(); render();
   }
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); render(); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -932,13 +935,13 @@
         </div>
         <div class="btn-group-wrap">
           <button class="btn ghost sm" data-action="openCustomerHistory" data-id="${o.id}" title="سجل هذا العميل مع كل طلباته">🕘 سجل العميل</button>
-          <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
+          ${pr.complete ? '' : `<button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>`}
         </div>
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
 
-      ${pr.complete ? `<div class="done-notice">✅ الطلبية دي مكتملة — هتلاقيها في سجل العميل، مش في قائمة الطلبات.</div>` : ''}
+      ${pr.complete ? `<div class="done-notice">✅ الطلبية دي مكتملة ومقفولة للتعديل — نفس الأرقام دي هتلاقيها في سجل العميل. لو فيه غلطة، افتحها من "📁 عرض المكتملة" في قائمة الطلبات.</div>` : ''}
 
       <div class="field-row" style="margin-bottom:18px;">
         <div>
@@ -953,10 +956,23 @@
 
       ${o.items.length===0 ? emptyHtml('📋','لا توجد أصناف في هذه الطلبية بعد.') : o.items.map(it=>{
         const p = productById(it.productId);
+        const label = p?escapeHtml((p.code?p.code+' — ':'')+p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>';
+        if(pr.complete){
+          return `<div class="order-item-row readonly">
+            <div class="order-item-name">
+              ${thumbHtml(p&&p.image, p&&p.name)}
+              <b>${label}</b>
+            </div>
+            <div><span class="mini-label">مطلوب</span><div class="ro-value mono">${fmt(it.ordered)}</div></div>
+            <div><span class="mini-label">منتَج</span><div class="ro-value mono">${fmt(it.produced)}</div></div>
+            <div><span class="mini-label">مباع</span><div class="ro-value mono">${fmt(it.sold)}</div></div>
+            <div class="del-cell"></div>
+          </div>`;
+        }
         return `<div class="order-item-row">
           <div class="order-item-name">
             ${thumbHtml(p&&p.image, p&&p.name)}
-            <b>${p?escapeHtml((p.code?p.code+' — ':'')+p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>'}</b>
+            <b>${label}</b>
           </div>
           <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
           <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
