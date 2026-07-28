@@ -15,6 +15,7 @@
   let activeOrderId = null;
   let modal = null; // {title, fields, submitLabel, onSubmit}
   let confirmTarget = null; // {message, onConfirm}
+  let historyModal = null; // orderId of the order whose customer history is being viewed
   let searchQuery = "";
 
   // ---------- password lock / cross-device sync ----------
@@ -438,7 +439,7 @@
       bindLockEvents();
       return;
     }
-    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '') + (changePasswordModal? changePasswordModalHtml() : '');
+    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '');
     bindEvents();
   }
 
@@ -569,15 +570,16 @@
     const lowFabrics = state.fabrics.filter(f=>fabricRemaining(f) < LOW_STOCK_METERS);
     const act = activeOrders();
     const rev = totalRevenue();
+    const best = bestSellerStats();
     return `
     <div class="ticket">
       <div class="ticket-stub"><h2 class="ticket-title">القماش المنخفض</h2></div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
       ${lowFabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش منخفض المخزون حاليًا') : `
-      <table><thead><tr><th>الكود</th><th>اللون</th><th>المتبقي</th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>الكود</th><th>اللون</th><th>المتبقي</th></tr></thead><tbody>
       ${lowFabrics.map(f=>`<tr><td>${escapeHtml(f.code)}</td><td><span class="swatch" style="background:${colorSwatch(f.color)}"></span>${escapeHtml(f.color)}</td><td class="num" style="color:#C1442E">${fmt(fabricRemaining(f))} م</td></tr>`).join('')}
-      </tbody></table>`}
+      </tbody></table></div>`}
       </div>
     </div>
 
@@ -600,6 +602,28 @@
       </div>
     </div>
 
+    <div class="ticket">
+      <div class="ticket-stub"><h2 class="ticket-title">🏆 الأكثر مبيعًا</h2></div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+      ${!best ? emptyHtml('📊','لا توجد مبيعات مسجّلة بعد. سجّل مبيعات في الطلبات عشان يظهر هنا أكتر منتج بيتباع.') : `
+      <div class="bestseller-wrap">
+        <div class="bestseller-wheel">${donutWheelSvg(best)}</div>
+        <div class="bestseller-info">
+          <div class="bestseller-name">${escapeHtml(best.name)}${best.cut ? ' — '+escapeHtml(best.cut) : ''}</div>
+          <div class="muted" style="font-size:13px;margin-bottom:10px;">${fmt(best.total)} قطعة مباعة إجمالاً (كل الألوان)${best.colors.length>1 ? ` · اللون الأكثر مبيعًا: ${escapeHtml(best.colors[0].color)}` : ''}</div>
+          <div class="bestseller-legend">
+          ${best.colors.map(c=>`<div class="legend-row">
+            <span class="swatch" style="background:${colorSwatch(c.color)}"></span>
+            <span class="legend-label">${escapeHtml(c.color)}</span>
+            <span class="legend-num mono">${fmt(c.sold)} <span class="muted">(${c.pct}%)</span></span>
+          </div>`).join('')}
+          </div>
+        </div>
+      </div>`}
+      </div>
+    </div>
+
     ${rev>0 ? `<div class="ticket">
       <div class="ticket-stub"><h2 class="ticket-title">إجمالي المبيعات</h2></div>
       <div class="ticket-perf"></div>
@@ -609,6 +633,63 @@
       </div>
     </div>` : ''}
     `;
+  }
+
+  // ---------- best seller stats (top product by units sold, broken down by fabric color) ----------
+  function bestSellerStats(){
+    const soldByProduct = new Map(); // productId -> total sold across all orders
+    state.orders.forEach(o => o.items.forEach(it => {
+      const s = Number(it.sold) || 0;
+      if(s <= 0) return;
+      soldByProduct.set(it.productId, (soldByProduct.get(it.productId) || 0) + s);
+    }));
+    if(soldByProduct.size === 0) return null;
+
+    // group by name+cut so color variants of "the same product" roll up together
+    const groups = new Map(); // key -> {name, cut, total, colors: Map(colorLabel -> sold)}
+    soldByProduct.forEach((sold, productId) => {
+      const p = productById(productId);
+      if(!p) return; // product was deleted since; its historical sales aren't attributable anymore
+      const key = (p.name||'').trim().toLowerCase() + '||' + (p.cut||'').trim().toLowerCase();
+      if(!groups.has(key)) groups.set(key, { name: p.name, cut: p.cut, total: 0, colors: new Map() });
+      const g = groups.get(key);
+      g.total += sold;
+      const f = p.fabricId ? fabricById(p.fabricId) : null;
+      const colorLabel = f ? f.color.trim() : 'بدون قماش محدد';
+      g.colors.set(colorLabel, (g.colors.get(colorLabel) || 0) + sold);
+    });
+    if(groups.size === 0) return null;
+
+    let top = null;
+    groups.forEach(g => { if(!top || g.total > top.total) top = g; });
+    if(!top || top.total <= 0) return null;
+
+    const colors = Array.from(top.colors.entries())
+      .map(([color, sold]) => ({ color, sold, pct: Math.round(sold / top.total * 100) }))
+      .sort((a,b) => b.sold - a.sold);
+
+    return { name: top.name, cut: top.cut, total: top.total, colors };
+  }
+
+  // Donut "wheel": ring segments sized by color share, total sold count in the middle.
+  function donutWheelSvg(stats){
+    const size = 160, r = 60, cx = 80, cy = 80, strokeW = 22;
+    const circumference = 2 * Math.PI * r;
+    let acc = 0;
+    const segs = stats.colors.map(c => {
+      const len = Math.max(0, (c.sold / stats.total) * circumference);
+      const dash = `${len} ${Math.max(0, circumference - len)}`;
+      const circle = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colorSwatch(c.color)}" stroke-width="${strokeW}" stroke-dasharray="${dash}" stroke-dashoffset="${-acc}" transform="rotate(-90 ${cx} ${cy})"><title>${escapeHtml(c.color)}: ${c.sold} (${c.pct}%)</title></circle>`;
+      acc += len;
+      return circle;
+    }).join('');
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="توزيع الألوان في أكثر منتج مبيعًا">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(0,0,0,.07)" stroke-width="${strokeW}"></circle>
+      ${segs}
+      <circle cx="${cx}" cy="${cy}" r="${r - strokeW/2 - 5}" fill="var(--paper)"></circle>
+      <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="24" font-weight="700" fill="var(--ink)">${stats.total}</text>
+      <text x="${cx}" y="${cy + 17}" text-anchor="middle" font-family="'IBM Plex Sans Arabic'" font-size="11" fill="var(--ink-soft)">قطعة مباعة</text>
+    </svg>`;
   }
 
   function fabricsHtml(){
@@ -634,7 +715,7 @@
       ${state.fabrics.length>0 ? searchRowHtml('ابحث بالكود أو اللون...') + imageMatchControlsHtml('fabrics') : ''}
       ${state.fabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش مسجل بعد. أضف أول رصيد من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الكود</th><th>اللون</th><th>الإجمالي</th><th>المستخدم</th><th>المتبقي</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th></th><th>الكود</th><th>اللون</th><th>الإجمالي</th><th>المستخدم</th><th>المتبقي</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
       ${list.map((f,idx)=>{
         const rem = fabricRemaining(f);
         const low = rem < LOW_STOCK_METERS;
@@ -653,7 +734,7 @@
           </td>
         </tr>`;
       }).join('')}
-      </tbody></table>`}
+      </tbody></table></div>`}
       </div>
     </div>`;
   }
@@ -684,7 +765,7 @@
       ${state.products.length>0 ? searchRowHtml('ابحث بالرقم أو الاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الجاهز عندك</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الجاهز عندك</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
       ${list.map((p,idx)=>{
         const f = p.fabricId ? fabricById(p.fabricId) : null;
         const fabricCell = p.fabricId
@@ -709,7 +790,7 @@
           </td>
         </tr>`;
       }).join('')}
-      </tbody></table>`}
+      </tbody></table></div>`}
       </div>
     </div>`;
   }
@@ -756,7 +837,10 @@
           <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span></h2>
           <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span><span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')}</span></div>
         </div>
-        <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
+        <div class="btn-group-wrap">
+          <button class="btn ghost sm" data-action="openCustomerHistory" data-id="${o.id}" title="سجل هذا العميل مع كل طلباته">🕘 سجل العميل</button>
+          <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
+        </div>
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
@@ -775,7 +859,7 @@
       ${o.items.length===0 ? emptyHtml('📋','لا توجد أصناف في هذه الطلبية بعد.') : o.items.map(it=>{
         const p = productById(it.productId);
         return `<div class="order-item-row">
-          <div style="display:flex;align-items:center;gap:8px;">
+          <div class="order-item-name">
             ${thumbHtml(p&&p.image, p&&p.name)}
             <b>${p?escapeHtml((p.code?p.code+' — ':'')+p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>'}</b>
           </div>
@@ -881,6 +965,52 @@
         <div class="modal-actions">
           <button class="btn red" data-action="confirmYes">نعم، متأكد</button>
           <button class="btn ghost" data-action="confirmNo">إلغاء</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function customerOrders(name){
+    const key = (name||'').trim().toLowerCase();
+    if(!key) return [];
+    return state.orders
+      .filter(o => (o.name||'').trim().toLowerCase() === key)
+      .slice()
+      .sort((a,b) => (a.date||'').localeCompare(b.date||''));
+  }
+
+  function customerHistoryHtml(){
+    const cur = orderById(historyModal);
+    if(!cur){ return ''; }
+    const name = (cur.name||'').trim();
+    const orders = customerOrders(name);
+    return `<div class="overlay">
+      <div class="modal" style="max-width:560px;">
+        <button class="modal-close" data-action="closeHistoryModal">✕</button>
+        <h3>🕘 سجل العميل: ${escapeHtml(name)}</h3>
+        <div class="muted" style="font-size:12px;margin:-8px 0 14px;">${orders.length} طلبية بنفس الاسم</div>
+        <div style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+        ${orders.length===0 ? emptyHtml('🕘','لا يوجد سجل سابق لهذا العميل') : orders.map(o=>{
+          const pr = orderProgress(o);
+          const isCurrent = o.id === cur.id;
+          return `<div class="ticket mini" style="margin:0;${isCurrent?'border-color:var(--gold, #e9be58);':''}">
+            <div class="ticket-stub">
+              <div>
+                <h2 class="ticket-title" style="font-size:14px;">${escapeHtml(o.date||'بدون تاريخ')} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span>${isCurrent?' <span class="muted" style="font-size:11px;">(الطلبية الحالية)</span>':''}</h2>
+                <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span></div>
+              </div>
+            </div>
+            <div class="ticket-body" style="padding-top:8px;">
+            ${o.items.length===0 ? '<div class="muted" style="font-size:13px;">لا توجد أصناف</div>' : o.items.map(it=>{
+              const p = productById(it.productId);
+              return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.06);">
+                <span>${p?escapeHtml((p.code?p.code+' — ':'')+p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>'}</span>
+                <span class="mono muted">مطلوب ${fmt(it.ordered)} · منتَج ${fmt(it.produced)} · مباع ${fmt(it.sold)}</span>
+              </div>`;
+            }).join('')}
+            </div>
+          </div>`;
+        }).join('')}
         </div>
       </div>
     </div>`;
@@ -1175,6 +1305,8 @@
         else if(action==='addOrderItem') modalAddOrderItem(id);
         else if(action==='deleteOrderItem') deleteOrderItem(el.getAttribute('data-order'), el.getAttribute('data-item'));
         else if(action==='closeModal') closeModal();
+        else if(action==='openCustomerHistory'){ historyModal = id; render(); }
+        else if(action==='closeHistoryModal'){ historyModal = null; render(); }
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
         else if(action==='confirmNo'){ confirmTarget=null; render(); }
         else if(action==='openChangePassword'){ changePasswordModal=true; changePasswordError=''; render(); }

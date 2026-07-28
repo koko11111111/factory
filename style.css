@@ -256,6 +256,15 @@
   .order-item-row:last-child{ border-bottom:none; }
   .order-item-row .mini-label{ font-size:11px; color:var(--ink-soft); display:block; margin-bottom:3px; }
   .order-item-row input{ width:100%; padding:6px 8px; border-radius:6px; border:1px solid var(--paper-2); font-family:'IBM Plex Mono'; font-size:14px; }
+  .order-item-name{ display:flex; align-items:center; gap:8px; min-width:0; }
+  .order-item-name b{ overflow-wrap:anywhere; }
+
+  /* ---------- header button groups (wrap gracefully on narrow tickets) ---------- */
+  .btn-group-wrap{ display:flex; gap:8px; flex-wrap:wrap; }
+
+  /* ---------- horizontally-scrollable tables (mobile) ---------- */
+  .table-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .table-scroll table{ min-width:520px; }
 
   .toolbar{
     display:flex; align-items:center; gap:12px; flex-wrap:wrap;
@@ -271,6 +280,17 @@
   .order-card:hover{ box-shadow: 0 12px 34px rgba(0,0,0,.34); }
   .back-link{ display:inline-flex; align-items:center; gap:6px; color: var(--paper); background:none; border:none; font-size:14px; margin-bottom:14px; font-weight:600; }
   .back-link:hover{ text-decoration:underline; }
+
+  /* ---------- best seller wheel ---------- */
+  .bestseller-wrap{ display:flex; align-items:center; gap:26px; flex-wrap:wrap; }
+  .bestseller-wheel{ flex-shrink:0; line-height:0; }
+  .bestseller-info{ flex:1 1 220px; min-width:200px; }
+  .bestseller-name{ font-family:'Tajawal','IBM Plex Sans Arabic'; font-weight:800; font-size:17px; margin-bottom:2px; }
+  .bestseller-legend{ display:flex; flex-direction:column; gap:7px; }
+  .legend-row{ display:flex; align-items:center; gap:8px; font-size:13.5px; }
+  .legend-row .swatch{ margin:0; flex-shrink:0; }
+  .legend-label{ flex:1; }
+  .legend-num{ font-size:13px; white-space:nowrap; }
 
   .toast{
     position:fixed; bottom:20px; right:20px; left:auto; background: var(--ink); color: var(--paper);
@@ -310,11 +330,73 @@
   .lock-note{ margin-top:16px; font-size:12px; line-height:1.6; color: rgba(246,240,222,.55); }
 
   @media (max-width:640px){
-    .order-item-row{ grid-template-columns: 1fr 1fr; }
+    #app{ padding:12px 10px 50px; }
+
+    /* iOS Safari zooms in on any input under 16px on focus — keep all inputs at 16px on touch widths */
+    input, select, .field input, .field select, .search-row input, .image-match-row input[type="text"], .lock-card .field input, .order-item-row input{
+      font-size:16px;
+    }
+
+    /* touch targets: keep every tappable control at a comfortable minimum size */
+    .btn{ min-height:40px; }
+    .btn.sm{ min-height:36px; }
+    .btn.icon-only{ min-width:40px; justify-content:center; }
+    .tab{ min-height:38px; }
+    .modal-close{ padding:8px; top:8px; left:8px; }
+
+    .topbar{ padding:14px; gap:10px; }
+    .brand-name{ font-size:19px; max-width:150px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
+    .brand-tag{ font-size:11px; }
+    .quickstats{ gap:8px; }
+    .qstat{ min-width:78px; padding:7px 10px; }
+    .qstat b{ font-size:16px; }
+    .qstat span{ font-size:10px; }
+
+    .tabs{ gap:6px; }
+    .tab{ padding:8px 14px; font-size:13px; flex:1 1 auto; text-align:center; }
+
+    .ticket-title{ font-size:16px; }
+    .ticket-stub{ padding:13px 14px 11px; }
+    .ticket-body{ padding:15px 14px 16px; }
+    .ticket.mini .ticket-stub{ padding:10px 12px 8px; }
+    .ticket.mini .ticket-body{ padding:10px 12px 12px; }
+
+    .toolbar{ padding:12px 14px; }
+    .toolbar .btn{ flex:1 1 auto; justify-content:center; }
+    .toolbar-search{ flex-basis:100%; order:3; }
+
+    /* order rows: name gets its own full-width row above the number fields */
+    .order-item-row{ grid-template-columns: 1fr 1fr; gap:8px 10px; padding:12px 0; }
+    .order-item-name{ grid-column: span 2; }
     .order-item-row .del-cell{ grid-column: span 2; text-align:left; }
-    .topbar{ padding:14px; }
-    .brand-name{ font-size:21px; }
+
+    /* stack side-by-side form fields (name/cut, price/etc.) so they aren't squeezed */
+    .field-row{ flex-direction:column; gap:0; }
+
+    .modal{ padding:18px 16px 16px; max-width:100%; }
+    .modal-actions{ flex-wrap:wrap; }
+    .modal-actions .btn{ flex:1 1 auto; justify-content:center; }
+
+    .row-actions{ flex-wrap:wrap; justify-content:flex-start; }
+
+    .toast{ left:12px; right:12px; bottom:16px; text-align:center; }
+
+    .image-preview{ height:100px; }
+
+    .bestseller-wrap{ justify-content:center; text-align:center; }
+    .bestseller-info{ min-width:100%; }
+    .legend-row{ justify-content:center; }
   }
+
+  @media (max-width:400px){
+    .brand-mark{ width:36px; height:36px; }
+    .brand-mark svg{ width:20px; height:20px; }
+    .brand-name{ font-size:17px; max-width:120px; }
+    .qstat{ min-width:70px; padding:6px 8px; }
+    .btn{ padding:8px 12px; font-size:13px; }
+    .ticket-title{ font-size:15px; }
+  }
+
   @media (prefers-reduced-motion: reduce){
     *{ transition:none !important; animation:none !important; }
   }
