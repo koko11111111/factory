@@ -309,7 +309,6 @@
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
-    if(field!=="sold" && orderProgress(o).complete){ showToast("الطلبية دي مكتملة الإنتاج، مينفعش تتعدل كمية الطلب/الإنتاج"); render(); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -889,7 +888,7 @@
     <div class="toolbar">
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
-      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?'🙈 إخفاء المكتملة':'✅ إظهار المكتملة'} (${completedCount})</button>` : ''}
+      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?'🔽 إخفاء المكتملة':'✅ إظهار المكتملة'} (${completedCount})</button>` : ''}
       ${completedCount>0 ? `<button class="btn ghost" data-action="openCustomerLookup" title="دور على طلبيات وسجل عميل معين، حتى لو كل طلباته مكتملة">🕘 سجل عميل</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
@@ -975,18 +974,6 @@
       ${o.items.length===0 ? emptyHtml('📋','لا توجد أصناف في هذه الطلبية بعد.') : o.items.map(it=>{
         const p = productById(it.productId);
         const label = p?escapeHtml((p.code?p.code+' — ':'')+p.name+' — '+p.cut):'<span class="muted">منتج محذوف</span>';
-        if(pr.complete){
-          return `<div class="order-item-row readonly">
-            <div class="order-item-name">
-              ${thumbHtml(p&&p.image, p&&p.name)}
-              <b>${label}</b>
-            </div>
-            <div><span class="mini-label">مطلوب</span><div class="ro-value mono">${fmt(it.ordered)}</div></div>
-            <div><span class="mini-label">منتَج</span><div class="ro-value mono">${fmt(it.produced)}</div></div>
-            <div><span class="mini-label">مباع</span><div class="ro-value mono">${fmt(it.sold)}</div></div>
-            <div class="del-cell"></div>
-          </div>`;
-        }
         return `<div class="order-item-row">
           <div class="order-item-name">
             ${thumbHtml(p&&p.image, p&&p.name)}
@@ -995,7 +982,7 @@
           <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
           <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
           <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
-          <div class="del-cell"><button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button></div>
+          <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button>`}</div>
         </div>`;
       }).join('')}
       </div>
