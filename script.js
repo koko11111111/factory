@@ -1526,7 +1526,8 @@
         else if(action==='addOrderItem') modalAddOrderItem(id);
         else if(action==='deleteOrderItem') deleteOrderItem(el.getAttribute('data-order'), el.getAttribute('data-item'));
         else if(action==='closeModal') closeModal();
-        else if(action==='openCustomerHistory'){ historyModal = id; render(); }
+        else if(action==='openCustomerHistory'){ const o = orderById(id); if(o){ historyModal = o.name; historyContextOrderId = id; } render(); }
+        else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
         else if(action==='confirmNo'){ confirmTarget=null; render(); }
