@@ -17,6 +17,7 @@
   let confirmTarget = null; // {message, onConfirm}
   let historyModal = null; // customer name (string) whose history is being viewed, or null
   let historyContextOrderId = null; // if opened from a specific order, highlight it as "current" in the list
+  let lightboxImage = null; // url/dataURL currently shown full-size, or null when closed
   let searchQuery = "";
   let showCompletedOrders = false; // Orders tab: toggle to reveal completed/archived orders
 
@@ -207,14 +208,15 @@
     const code = vals.code.trim();
     let addedCount = 0, mergedCount = 0;
     rows.forEach(row=>{
+      const rowImage = row.image || vals.image || '';
       const existing = state.fabrics.find(f => f.code.trim()===code && f.color.trim().toLowerCase()===row.color.toLowerCase());
       if(existing){
         existing.total = (Number(existing.total)||0) + row.qty;
-        if(vals.image) existing.image = vals.image;
+        if(rowImage) existing.image = rowImage;
         existing.updatedAt = Date.now();
         mergedCount++;
       } else {
-        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: vals.image || null, updatedAt: Date.now() });
+        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: rowImage || null, updatedAt: Date.now() });
         addedCount++;
       }
     });
@@ -527,6 +529,12 @@
     if(url) return `<span class="thumb"><img src="${escapeHtml(url)}" alt="${escapeHtml(alt||'')}" loading="lazy"></span>`;
     return `<span class="thumb thumb-empty">🧵</span>`;
   }
+  function lightboxHtml(){
+    return `<div class="lightbox-overlay" id="lightboxOverlay">
+      <button class="lightbox-close" data-action="closeLightbox" title="إغلاق">✕</button>
+      <img class="lightbox-img" src="${escapeHtml(lightboxImage)}" alt="">
+    </div>`;
+  }
 
   // ---------- open-modal actions ----------
   function modalAddFabric(){
@@ -536,7 +544,7 @@
       fields: [
         {key:'code', label:'كود القماش', type:'text', required:true},
         {type:'colorRows', key:'colors', label:'الألوان والكميات'},
-        {key:'image', label:'صورة القماش (تُطبَّق على كل الألوان)', type:'image', value:''}
+        {key:'image', label:'صورة افتراضية (تُستخدم فقط للألوان اللي مالهاش صورة خاصة فوق)', type:'image', value:''}
       ],
       onSubmit: vals => addFabric(vals)
     });
@@ -641,9 +649,55 @@
   function bindColorRowRemove(btn, container){
     if(!btn || !container) return;
     btn.addEventListener('click', ()=>{
-      if(container.querySelectorAll('.color-row').length<=1){ showToast("لازم يفضل لون واحد على الأقل"); return; }
-      btn.closest('.color-row').remove();
+      if(container.querySelectorAll('.color-row-block').length<=1){ showToast("لازم يفضل لون واحد على الأقل"); return; }
+      btn.closest('.color-row-block').remove();
     });
+  }
+
+  // ---------- backup / restore (full data export & import, doesn't touch normal save/sync flow) ----------
+  function exportBackup(){
+    try{
+      const payload = { app: 'factory-manager-backup', exportedAt: new Date().toISOString(), state: state };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0,10);
+      a.href = url;
+      a.download = `factory-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=> URL.revokeObjectURL(url), 2000);
+      showToast('اتنزلت النسخة الاحتياطية');
+    }catch(e){
+      showToast('تعذر إنشاء النسخة الاحتياطية');
+    }
+  }
+  function importBackupFromFile(file){
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      let parsed;
+      try{ parsed = JSON.parse(e.target.result); }
+      catch(err){ showToast('الملف ده مش نسخة احتياطية صالحة (JSON غلط)'); return; }
+      const incoming = (parsed && parsed.state) ? parsed.state : parsed; // supports wrapped backup file or a raw state object
+      if(!incoming || !Array.isArray(incoming.fabrics) || !Array.isArray(incoming.products) || !Array.isArray(incoming.orders)){
+        showToast('الملف ده مش نسخة احتياطية صالحة لبرنامج المصنع');
+        return;
+      }
+      askConfirm('هيتم استبدال كل البيانات الحالية (الأقمشة والمنتجات والطلبات) بالنسخة اللي في الملف ده. متأكد؟', () => {
+        state = {
+          factoryName: incoming.factoryName || state.factoryName,
+          fabrics: incoming.fabrics,
+          products: incoming.products,
+          orders: incoming.orders
+        };
+        save();
+        showToast('اترجعت النسخة الاحتياطية بنجاح');
+        render();
+      });
+    };
+    reader.readAsText(file);
   }
 
   function askConfirm(message, onConfirm){
@@ -659,7 +713,7 @@
       bindLockEvents();
       return;
     }
-    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '');
+    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '') + (lightboxImage? lightboxHtml() : '');
     bindEvents();
   }
 
@@ -699,6 +753,8 @@
         <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
         ${overdue>0 ? `<div class="qstat"><b style="color:#C1442E">${overdue}</b><span>طلبية متأخرة ⚠️</span></div>` : ''}
         <button class="btn ghost sm icon-only" data-action="toggleTheme" title="${theme==='dark'?'وضع فاتح':'وضع غامق'}" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${theme==='dark'?'☀️':'🌙'}</button>
+        <button class="btn ghost sm icon-only" data-action="exportBackup" title="تنزيل نسخة احتياطية من كل البيانات" style="color:var(--paper); border-color:rgba(233,190,88,.35);">⬇️</button>
+        <label class="btn ghost sm icon-only image-upload-btn" title="استرجاع نسخة احتياطية من ملف" style="color:var(--paper); border-color:rgba(233,190,88,.35);">⬆️<input type="file" accept="application/json,.json" class="visually-hidden" id="backupRestoreInput"></label>
         ${currentUid ? `
         <button class="btn ghost sm icon-only" data-action="openChangePassword" title="تغيير كلمة السر" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔑</button>
         <button class="btn ghost sm icon-only" data-action="lockApp" title="قفل" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔒</button>` : ''}
@@ -1221,18 +1277,36 @@
     </div>`;
   }
 
-  // ---------- repeatable "color + quantity" rows (add many fabric colors under one code at once) ----------
-  function colorRowHtml(idx, color, qty){
-    return `<div class="color-row">
-      <input type="text" name="mc_color_${idx}" placeholder="اللون (مثلاً: أحمر)" value="${escapeHtml(color||'')}">
-      <input type="number" name="mc_qty_${idx}" placeholder="الكمية (متر)" min="0" step="0.1" value="${qty!==undefined && qty!==null && qty!=='' ? escapeHtml(qty) : ''}">
-      <button type="button" class="btn red sm icon-only" data-remove-color-row title="حذف اللون">✕</button>
+  // ---------- repeatable "color + quantity + photo" rows (add many fabric colors under one code at once) ----------
+  function colorRowHtml(idx, color, qty, image){
+    const img = image || '';
+    const imgKey = 'mc_image_' + idx;
+    return `<div class="color-row-block">
+      <div class="color-row">
+        <input type="text" name="mc_color_${idx}" placeholder="اللون (مثلاً: أحمر)" value="${escapeHtml(color||'')}">
+        <input type="number" name="mc_qty_${idx}" placeholder="الكمية (متر)" min="0" step="0.1" value="${qty!==undefined && qty!==null && qty!=='' ? escapeHtml(qty) : ''}">
+        <button type="button" class="btn red sm icon-only" data-remove-color-row title="حذف اللون">✕</button>
+      </div>
+      <div class="color-row-image">
+        <div class="image-preview sm" id="imgPreview_${imgKey}">
+          ${img ? `<img src="${escapeHtml(img)}" alt="">` : `<div class="image-placeholder">صورة اللون ده</div>`}
+        </div>
+        <input type="hidden" name="${imgKey}" id="imgInput_${imgKey}" value="${escapeHtml(img)}">
+        <div class="image-actions">
+          <label class="btn ghost sm image-upload-btn">📁 صورة اللون<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${imgKey}"></label>
+          <button type="button" class="btn ghost sm" data-image-clear="${imgKey}" style="${img?'':'display:none;'}">✕ إزالة</button>
+        </div>
+        <div class="image-url-row">
+          <input type="text" placeholder="أو الصق رابط صورة مباشر (URL)" data-image-url-input="${imgKey}">
+          <button type="button" class="btn ghost sm" data-image-url-apply="${imgKey}">تطبيق</button>
+        </div>
+      </div>
     </div>`;
   }
   function colorRowsFieldHtml(f){
     return `<div class="field">
       <label>${escapeHtml(f.label)}</label>
-      <div class="muted" style="font-size:12px;margin:-2px 0 8px;">أضف كل لون بمتراته — تقدر تضيف أكتر من لون بنفس الكود ده دفعة واحدة بدل ما تكرر الكود كل مرة</div>
+      <div class="muted" style="font-size:12px;margin:-2px 0 8px;">أضف كل لون بمتراته وصورته — تقدر تضيف أكتر من لون بنفس الكود ده دفعة واحدة بدل ما تكرر الكود كل مرة، وكل لون تقدر تحط له صورة مختلفة</div>
       <div class="color-rows" id="colorRows_${f.key}" data-seq="1">
         ${colorRowHtml(0)}
       </div>
@@ -1265,7 +1339,8 @@
       const color = (vals[k]||'').trim();
       if(!color) return;
       const qty = Number(vals['mc_qty_'+m[1]]) || 0;
-      rows.push({ color, qty });
+      const image = (vals['mc_image_'+m[1]]||'').trim();
+      rows.push({ color, qty, image });
     });
     return rows;
   }
@@ -1372,6 +1447,33 @@
   }
 
   // ---------- image field helpers ----------
+  // binds upload/clear/url-apply controls for every image field under `root`
+  // (the whole app on a normal render, or just a freshly-inserted color row
+  // that was added without a full re-render)
+  function bindImageFieldControls(root){
+    root.querySelectorAll('[data-upload-for]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const key = inp.getAttribute('data-upload-for');
+        const file = inp.files && inp.files[0];
+        if(!file) return;
+        readImageFile(file, dataUrl => setImageFieldValue(key, dataUrl));
+      });
+    });
+    root.querySelectorAll('[data-image-clear]').forEach(btn=>{
+      btn.addEventListener('click', ()=> setImageFieldValue(btn.getAttribute('data-image-clear'), ''));
+    });
+    root.querySelectorAll('[data-image-url-apply]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const key = btn.getAttribute('data-image-url-apply');
+        const input = root.querySelector(`[data-image-url-input="${key}"]`) || document.querySelector(`[data-image-url-input="${key}"]`);
+        const val = input ? input.value.trim() : '';
+        if(!val){ showToast('أدخل رابط صورة أولاً'); return; }
+        setImageFieldValue(key, val);
+        if(input) input.value = '';
+      });
+    });
+  }
+
   function setImageFieldValue(key, url){
     const hidden = document.getElementById('imgInput_'+key);
     if(hidden) hidden.value = url || '';
@@ -1512,6 +1614,15 @@
       nameInput.addEventListener('change', e => setFactoryName(e.target.value));
     }
 
+    const backupRestoreInput = document.getElementById('backupRestoreInput');
+    if(backupRestoreInput){
+      backupRestoreInput.addEventListener('change', () => {
+        const file = backupRestoreInput.files && backupRestoreInput.files[0];
+        importBackupFromFile(file);
+        backupRestoreInput.value = ''; // allow re-selecting the same file again later
+      });
+    }
+
     app.querySelectorAll('[data-nav]').forEach(el=>{
       el.addEventListener('click', ()=>{ view = el.getAttribute('data-nav'); searchQuery = ''; render(); });
     });
@@ -1609,6 +1720,7 @@
         container.setAttribute('data-seq', idx+1);
         const newRow = container.lastElementChild;
         bindColorRowRemove(newRow.querySelector('[data-remove-color-row]'), container);
+        bindImageFieldControls(newRow);
         const colorInput = newRow.querySelector('input[type="text"]');
         if(colorInput) colorInput.focus();
       });
@@ -1633,27 +1745,7 @@
     });
 
     // image fields: upload, search, manual URL, clear
-    app.querySelectorAll('[data-upload-for]').forEach(inp=>{
-      inp.addEventListener('change', ()=>{
-        const key = inp.getAttribute('data-upload-for');
-        const file = inp.files && inp.files[0];
-        if(!file) return;
-        readImageFile(file, dataUrl => setImageFieldValue(key, dataUrl));
-      });
-    });
-    app.querySelectorAll('[data-image-clear]').forEach(btn=>{
-      btn.addEventListener('click', ()=> setImageFieldValue(btn.getAttribute('data-image-clear'), ''));
-    });
-    app.querySelectorAll('[data-image-url-apply]').forEach(btn=>{
-      btn.addEventListener('click', ()=>{
-        const key = btn.getAttribute('data-image-url-apply');
-        const input = app.querySelector(`[data-image-url-input="${key}"]`);
-        const val = input ? input.value.trim() : '';
-        if(!val){ showToast('أدخل رابط صورة أولاً'); return; }
-        setImageFieldValue(key, val);
-        if(input) input.value = '';
-      });
-    });
+    bindImageFieldControls(app);
 
     // "search by photo" (reverse image match) controls
     app.querySelectorAll('[data-match-toggle]').forEach(btn=>{
@@ -1717,6 +1809,7 @@
         else if(action==='deleteProduct') askConfirm('هل تريد حذف هذا المنتج؟', ()=>deleteProduct(id));
         else if(action==='duplicateProduct') duplicateProduct(id);
         else if(action==='toggleTheme') toggleTheme();
+        else if(action==='exportBackup') exportBackup();
         else if(action==='toggleBulkMode') toggleBulkMode(el.getAttribute('data-kind'));
         else if(action==='bulkDeleteFabrics') askConfirm('هل تريد حذف الأصناف المحددة؟', bulkDeleteFabrics);
         else if(action==='bulkDeleteProducts') askConfirm('هل تريد حذف الأصناف المحددة؟', bulkDeleteProducts);
@@ -1734,6 +1827,7 @@
         else if(action==='openCustomerHistory'){ const o = orderById(id); if(o){ historyModal = o.name; historyContextOrderId = id; } render(); }
         else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
+        else if(action==='closeLightbox'){ lightboxImage = null; render(); }
         else if(action==='addOrderForCustomer'){ const customerName = el.getAttribute('data-name'); historyModal = null; historyContextOrderId = null; modalAddOrder(customerName); }
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
         else if(action==='confirmNo'){ confirmTarget=null; render(); }
@@ -1747,6 +1841,17 @@
         }
       });
     });
+
+    // click any thumbnail photo to zoom it full-size
+    app.querySelectorAll('.thumb img').forEach(img=>{
+      img.addEventListener('click', ()=>{ lightboxImage = img.getAttribute('src'); render(); });
+    });
+    const lightboxOverlay = document.getElementById('lightboxOverlay');
+    if(lightboxOverlay){
+      lightboxOverlay.addEventListener('click', (ev)=>{
+        if(ev.target === lightboxOverlay){ lightboxImage = null; render(); }
+      });
+    }
 
     const form = document.getElementById('modalForm');
     if(form){
@@ -1782,6 +1887,10 @@
       });
     }
   }
+
+  document.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape' && lightboxImage){ lightboxImage = null; render(); }
+  });
 
   boot();
 })();
