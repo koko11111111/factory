@@ -246,6 +246,28 @@
   function fabricRemaining(f){ return (Number(f.total)||0) - (Number(f.used)||0); }
   function fabricById(id){ return state.fabrics.find(f=>f.id===id); }
   function productById(id){ return state.products.find(p=>p.id===id); }
+
+  // If an order item's "produced" is typed higher than its "sold", that
+  // extra stock was made but hasn't gone out the door yet — it's sitting
+  // ready, same as manually-entered readyQty. `producedFromReady` (set once
+  // when the order item is created) is excluded so ready stock that was
+  // already drawn down to cover that order isn't counted twice.
+  function productSurplusReady(productId){
+    let surplus = 0;
+    state.orders.forEach(o=>{
+      o.items.forEach(it=>{
+        if(it.productId !== productId) return;
+        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+        surplus += Math.max(0, newlyProduced - (Number(it.sold)||0));
+      });
+    });
+    return surplus;
+  }
+  // Total ready-to-sell stock for a product: what you told the app you
+  // already have, plus any unsold surplus from over-producing an order.
+  function effectiveReadyQty(p){
+    return (Number(p.readyQty)||0) + productSurplusReady(p.id);
+  }
   function orderById(id){ return state.orders.find(o=>o.id===id); }
 
   function totalRemainingMeters(){
@@ -419,7 +441,7 @@
       produced = fromReady;
       p.readyQty = (Number(p.readyQty)||0) - fromReady;
     }
-    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0 });
+    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady });
     if(fromReady>0){
       showToast(fromReady>=ordered ? `اتغطت الطلبية كلها من المخزون الجاهز (${fmt(fromReady)} قطعة)، مفيش داعي تنتج أكتر` : `اتغطى ${fmt(fromReady)} من ${fmt(ordered)} من المخزون الجاهز، والباقي محتاج إنتاج`);
     }
@@ -1315,6 +1337,9 @@
       matchMap = new Map(imageMatchResults.products.map(r=>[r.id, r.pct]));
       list = list.filter(p => matchMap.has(p.id)).sort((a,b)=> matchMap.get(b.id) - matchMap.get(a.id));
     }
+    const bulk = bulkMode.products;
+    const ids = list.map(p=>p.id);
+    const allSelected = ids.length>0 && ids.every(id=>selection.products.has(id));
     return `
     <div class="ticket">
       <div class="ticket-stub">
@@ -1324,6 +1349,7 @@
         </div>
         <div class="btn-group-wrap">
           <button class="btn ghost sm" data-action="openExcelImport" data-kind="products">📥 استيراد إكسل</button>
+          ${state.products.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="products">${bulk?'إلغاء التحديد':'✓ تحديد متعدد'}</button>` : ''}
           <button class="btn gold" data-action="addProduct">+ إضافة منتج</button>
         </div>
       </div>
@@ -1331,18 +1357,20 @@
       <div class="ticket-body">
       <div class="section-note">لكل منتج رقم خاص به، وكمية جاهزة عندك دلوقتي (لو موجودة)، وربطه بقماش اختياري.</div>
       ${state.products.length>0 ? searchRowHtml('ابحث بالرقم أو الاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
+      ${bulk && selection.products.size>0 ? `<div class="bulk-bar">محدد: ${selection.products.size} <button class="btn red sm" data-action="bulkDeleteProducts">🗑️ حذف المحدد</button></div>` : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
-      <div class="table-scroll"><table><thead><tr><th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الجاهز عندك</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr>${bulk?`<th><input type="checkbox" data-select-all="products" data-ids='${JSON.stringify(ids)}' ${allSelected?'checked':''}></th>`:''}<th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الجاهز عندك</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
       ${list.map((p,idx)=>{
         const f = p.fabricId ? fabricById(p.fabricId) : null;
         const fabricCell = p.fabricId
           ? (f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">قماش محذوف</span>')
           : '<span class="muted">—</span>';
-        const readyQty = Number(p.readyQty)||0;
+        const readyQty = effectiveReadyQty(p);
         const readyCell = readyQty>0 ? `<span class="badge ok">${fmt(readyQty)} قطعة</span>` : '<span class="muted">0</span>';
         const pct = matchActive ? matchMap.get(p.id) : null;
         return `<tr>
+          ${bulk?`<td><input type="checkbox" data-select="products:${p.id}" ${selection.products.has(p.id)?'checked':''}></td>`:''}
           <td>${thumbHtml(p.image, p.name)}</td>
           <td class="mono">${p.code ? escapeHtml(p.code) : '<span class="muted">—</span>'}</td>
           <td>${escapeHtml(p.name)}</td>
@@ -2007,7 +2035,7 @@
         if(hidden) hidden.value = matchedId;
         if(hint){
           const p = matchedId ? productById(matchedId) : null;
-          const readyQty = p ? (Number(p.readyQty)||0) : 0;
+          const readyQty = p ? effectiveReadyQty(p) : 0;
           if(!p){
             hint.style.display = 'none';
           } else if(readyQty>0){
