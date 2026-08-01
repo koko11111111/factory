@@ -20,7 +20,8 @@ import {
   EmailAuthProvider, reauthenticateWithCredential
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, onSnapshot, enableIndexedDbPersistence
+  getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, enableIndexedDbPersistence,
+  collection, getDocs
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 const cfg = window.FIREBASE_CONFIG;
@@ -48,8 +49,19 @@ try{ enableIndexedDbPersistence(db); }catch(e){ /* multiple tabs open, fine */ }
 const FIXED_EMAIL = "workshop@" + (cfg.projectId || "app") + ".local";
 const SETUP_DOC = doc(db, "meta", "setup");
 const workspaceDoc = (uid) => doc(db, "workspaces", uid);
+// Photos live in their own subcollection (one small doc per photo) instead of
+// inline inside the workspace doc. Firestore caps a single document at 1MB —
+// with photos inline, a workshop with a lot of product/fabric pictures could
+// hit that ceiling. Splitting them out means the workspace doc stays tiny
+// (just text/numbers) no matter how many photos get added, and each photo
+// doc is far under the 1MB limit on its own. This still runs entirely on the
+// free Spark plan — no billing account needed (Firebase Storage, the other
+// way to solve this, now requires the paid Blaze plan even for small usage).
+const imagesCol = (uid) => collection(db, "workspaces", uid, "images");
+const imageDoc = (uid, imageId) => doc(db, "workspaces", uid, "images", imageId);
 
 let unsubscribeSnapshot = null;
+let unsubscribeImagesSnapshot = null;
 
 function friendlyError(e){
   const code = (e && e.code) || "";
@@ -94,6 +106,7 @@ window.AppSync = {
   },
   async logout(){
     if(unsubscribeSnapshot){ unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+    if(unsubscribeImagesSnapshot){ unsubscribeImagesSnapshot(); unsubscribeImagesSnapshot = null; }
     await signOut(auth);
   },
   // fires once at start, and again on every login/logout
@@ -112,6 +125,36 @@ window.AppSync = {
     if(unsubscribeSnapshot) unsubscribeSnapshot();
     unsubscribeSnapshot = onSnapshot(workspaceDoc(uid), (snap)=>{
       if(snap.exists()) onChange(snap.data().state);
+    });
+  },
+  // ---- photos subcollection (see comment above imagesCol) ----
+  // one-time fetch of every stored photo: { imageId: dataURL, ... }
+  async loadImages(uid){
+    try{
+      const snap = await getDocs(imagesCol(uid));
+      const map = {};
+      snap.forEach(d => { map[d.id] = d.data().data; });
+      return map;
+    }catch(e){ return {}; }
+  },
+  async saveImage(uid, imageId, dataUrl){
+    await setDoc(imageDoc(uid, imageId), { data: dataUrl, updatedAt: Date.now() });
+  },
+  async deleteImage(uid, imageId){
+    try{ await deleteDoc(imageDoc(uid, imageId)); }catch(e){ /* already gone, fine */ }
+  },
+  // live updates from other devices: fires with { imageId: dataURL|null, ... }
+  // for whatever changed since the last event (null = photo was removed)
+  subscribeImages(uid, onChange){
+    if(unsubscribeImagesSnapshot) unsubscribeImagesSnapshot();
+    unsubscribeImagesSnapshot = onSnapshot(imagesCol(uid), (snap)=>{
+      const changes = {};
+      let any = false;
+      snap.docChanges().forEach(ch=>{
+        any = true;
+        changes[ch.doc.id] = ch.type === 'removed' ? null : ch.doc.data().data;
+      });
+      if(any) onChange(changes);
     });
   }
 };

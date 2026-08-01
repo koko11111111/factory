@@ -24,8 +24,7 @@ The app now supports one shared password for the whole workshop, with data synce
 
 **Notes:**
 - The password can be changed anytime from the 🔑 button in the top bar (must know the current password). The 🔒 button locks the app on that device until the password is re-entered.
-- Firebase's free tier (Spark plan) comfortably covers a small workshop's usage.
-- Firestore documents have a 1MB size limit. If you attach a lot of large product/fabric photos, you could eventually hit that ceiling — if it comes up, the fix is moving images to Firebase Storage instead of storing them inline, which is a follow-up, not something you need to worry about today.
+- Firebase's free tier (Spark plan) comfortably covers a small workshop's usage — including photos. Product/fabric photos are stored one-per-document in their own Firestore subcollection instead of inline in the main data document, so adding lots of photos doesn't run into Firestore's 1MB-per-document limit. (Firebase Storage — the more commonly suggested fix for this — now requires linking a billing account even for tiny usage, so this app avoids it on purpose and stays fully on the no-card-required Spark plan.)
 - If you never do this setup, the app keeps working exactly as before (local-only, no password, `localStorage` on one device).
 
 ## Running locally

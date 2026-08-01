@@ -47,6 +47,19 @@
   let changePasswordError = "";
   let changePasswordBusy = false;
 
+  // ---------- cloud photo storage (see buildSyncState/expandImagesInPlace) ----------
+  // Firestore caps a single document at 1MB. The whole app state (fabrics,
+  // products, orders) is one document, so if every uploaded photo lived
+  // inline in it, a workshop with a lot of photos could eventually hit that
+  // ceiling. To avoid that, uploaded photos (data: URLs) are stored one-per-
+  // document in their own subcollection when synced to Firestore, and swapped
+  // for a short "img:<id>" reference inside the synced copy of the state.
+  // Locally, `state.fabrics[i].image` / `state.products[i].image` always hold
+  // the real photo data — this layer only affects what gets sent to/read
+  // from Firestore, so nothing else in the app needs to know it exists.
+  const IMAGE_REF_PREFIX = "img:";
+  let remoteImageCache = {}; // ownerId -> dataURL, mirrors what's currently stored in Firestore
+
   // ---------- "search by photo" (reverse match against saved fabric/product images) ----------
   let imageMatchPanelOpen = { fabrics:false, products:false };
   let imageMatchQueryImage = { fabrics:null, products:null };   // dataURL or URL currently loaded as the query photo
@@ -71,6 +84,59 @@
       if(window.AppSync) return resolve();
       window.addEventListener("appsync-ready", ()=>resolve(), { once:true });
     });
+  }
+
+  function ownerImageId(kind, id){ return kind + '_' + id; }
+
+  // Returns { slim, toUpload, toDelete } — `slim` is a deep copy of `state`
+  // with every uploaded photo replaced by a short reference; `toUpload` is
+  // { ownerId: dataURL } for photos that changed since the last sync;
+  // `toDelete` is ownerIds no longer used by any fabric/product (deleted,
+  // photo removed, or photo replaced by a pasted URL instead of an upload).
+  function buildSyncState(){
+    const slim = JSON.parse(JSON.stringify(state));
+    const toUpload = {};
+    const usedOids = new Set();
+    function process(list, slimList, kind){
+      list.forEach((real, i)=>{
+        if(real.image && real.image.startsWith('data:')){
+          const oid = ownerImageId(kind, real.id);
+          usedOids.add(oid);
+          slimList[i].image = IMAGE_REF_PREFIX + oid;
+          if(remoteImageCache[oid] !== real.image) toUpload[oid] = real.image;
+        }
+      });
+    }
+    process(state.fabrics, slim.fabrics, 'fab');
+    process(state.products, slim.products, 'prod');
+    const toDelete = Object.keys(remoteImageCache).filter(oid => !usedOids.has(oid));
+    return { slim, toUpload, toDelete };
+  }
+
+  // Mutates targetState in place, turning any "img:<id>" reference back into
+  // the real photo data from imageMap (or null if not loaded/found yet).
+  function expandImagesInPlace(targetState, imageMap){
+    ['fabrics','products'].forEach(key=>{
+      (targetState[key]||[]).forEach(rec=>{
+        if(rec.image && typeof rec.image === 'string' && rec.image.startsWith(IMAGE_REF_PREFIX)){
+          const oid = rec.image.slice(IMAGE_REF_PREFIX.length);
+          rec.image = imageMap[oid] || null;
+        }
+      });
+    });
+  }
+
+  // Uploads/deletes whatever changed, per buildSyncState's plan, and keeps
+  // remoteImageCache in sync so unchanged photos aren't re-uploaded later.
+  async function syncImageChanges(uid, toUpload, toDelete){
+    for(const oid of Object.keys(toUpload)){
+      await window.AppSync.saveImage(uid, oid, toUpload[oid]);
+      remoteImageCache[oid] = toUpload[oid];
+    }
+    for(const oid of toDelete){
+      await window.AppSync.deleteImage(uid, oid);
+      delete remoteImageCache[oid];
+    }
   }
 
   async function boot(){
@@ -99,19 +165,42 @@
         currentUid = user.uid;
         authError = "";
         const remote = await window.AppSync.loadData(user.uid);
-        if(remote) state = Object.assign(state, remote);
-        else await window.AppSync.saveData(user.uid, state); // first login: seed the cloud with local data
+        remoteImageCache = await window.AppSync.loadImages(user.uid);
+        if(remote){
+          expandImagesInPlace(remote, remoteImageCache);
+          state = Object.assign(state, remote);
+        } else {
+          // first login: seed the cloud with local data (photos go to their own docs, not inline)
+          const { slim, toUpload } = buildSyncState();
+          await window.AppSync.saveData(user.uid, slim);
+          await syncImageChanges(user.uid, toUpload, []);
+        }
         authState = "unlocked";
         render();
         window.AppSync.subscribe(user.uid, (remoteState) => {
           applyingRemoteUpdate = true;
+          expandImagesInPlace(remoteState, remoteImageCache);
           state = Object.assign(state, remoteState);
+          try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
+          render();
+          applyingRemoteUpdate = false;
+        });
+        window.AppSync.subscribeImages(user.uid, (changedImages) => {
+          // a photo was added/changed/removed (maybe from another device) —
+          // merge it into the cache and re-expand any references to it
+          Object.keys(changedImages).forEach(oid=>{
+            const val = changedImages[oid];
+            if(val) remoteImageCache[oid] = val; else delete remoteImageCache[oid];
+          });
+          applyingRemoteUpdate = true;
+          expandImagesInPlace(state, remoteImageCache);
           try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
           render();
           applyingRemoteUpdate = false;
         });
       } else {
         currentUid = null;
+        remoteImageCache = {};
         authState = hasPassword ? "needsLogin" : "needsSetup";
         render();
       }
@@ -129,7 +218,9 @@
     }
     if(currentUid && !applyingRemoteUpdate){
       try{
-        await window.AppSync.saveData(currentUid, state);
+        const { slim, toUpload, toDelete } = buildSyncState();
+        await window.AppSync.saveData(currentUid, slim);
+        await syncImageChanges(currentUid, toUpload, toDelete);
       }catch(e){
         showToast("اتحفظت البيانات على الجهاز، بس تعذرت المزامنة (تحقق من الإنترنت)");
       }
