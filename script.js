@@ -18,6 +18,7 @@
   let historyModal = null; // customer name (string) whose history is being viewed, or null
   let historyContextOrderId = null; // if opened from a specific order, highlight it as "current" in the list
   let lightboxImage = null; // url/dataURL currently shown full-size, or null when closed
+  let excelImport = null; // {kind:'fabrics'|'products', headers:[], rows:[][], mapping:{field:colIndex}, error} or null when closed
   let searchQuery = "";
   let showCompletedOrders = false; // Orders tab: toggle to reveal completed/archived orders
 
@@ -700,6 +701,164 @@
     reader.readAsText(file);
   }
 
+  // ---------- import from Excel/CSV (bulk-add fabrics or products from a spreadsheet) ----------
+  function excelFieldsForKind(kind){
+    if(kind==='fabrics') return [
+      {key:'code', label:'كود القماش', required:true, synonyms:['كود','code','رقم']},
+      {key:'color', label:'اللون', required:true, synonyms:['لون','color']},
+      {key:'qty', label:'الكمية (متر)', required:true, synonyms:['كمية','متر','qty','quantity','meter']},
+      {key:'image', label:'رابط صورة (اختياري)', required:false, synonyms:['صورة','image','photo','url']}
+    ];
+    return [
+      {key:'name', label:'اسم المنتج', required:true, synonyms:['اسم','name']},
+      {key:'cut', label:'القصة / الشكل', required:true, synonyms:['قصة','قصه','cut','shape']},
+      {key:'code', label:'رقم/كود المنتج (اختياري)', required:false, synonyms:['كود','رقم','code']},
+      {key:'readyQty', label:'الكمية الجاهزة (اختياري)', required:false, synonyms:['جاهز','ready']},
+      {key:'price', label:'سعر البيع (اختياري)', required:false, synonyms:['سعر','price']},
+      {key:'fabric', label:'القماش المرتبط — اكتب "كود — لون" أو الكود بس (اختياري)', required:false, synonyms:['قماش','fabric']}
+    ];
+  }
+  function guessColumnMapping(kind, headers){
+    const mapping = {};
+    excelFieldsForKind(kind).forEach(f=>{
+      let found = -1;
+      for(let i=0;i<headers.length;i++){
+        const h = String(headers[i]||'').toLowerCase();
+        if(f.synonyms.some(s => h.includes(s.toLowerCase()))){ found = i; break; }
+      }
+      mapping[f.key] = found;
+    });
+    return mapping;
+  }
+  function openExcelImport(kind){
+    excelImport = { kind, headers: [], rows: [], mapping: {}, error: '' };
+    render();
+  }
+  function closeExcelImport(){ excelImport = null; render(); }
+  function handleExcelFile(file){
+    if(!file || !excelImport) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try{
+        if(typeof XLSX === 'undefined'){
+          excelImport.error = 'تعذر تحميل مكتبة قراءة الإكسل — تأكد من الاتصال بالإنترنت وحاول تاني';
+          render(); return;
+        }
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type:'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(sheet, { header:1, raw:false, defval:'' });
+        if(!raw || raw.length < 2){
+          excelImport.error = 'الملف فاضي أو مفيهوش صفوف بيانات تحت صف العناوين';
+          render(); return;
+        }
+        const headers = raw[0].map((h,i) => (h!==undefined && String(h).trim()!=='') ? String(h).trim() : ('عمود '+(i+1)));
+        const dataRows = raw.slice(1).filter(r => r.some(c => String(c||'').trim()!==''));
+        if(dataRows.length===0){
+          excelImport.error = 'مفيش صفوف بيانات تحت صف العناوين';
+          render(); return;
+        }
+        excelImport.headers = headers;
+        excelImport.rows = dataRows;
+        excelImport.mapping = guessColumnMapping(excelImport.kind, headers);
+        excelImport.error = '';
+        render();
+      }catch(err){
+        excelImport.error = 'تعذر قراءة الملف — تأكد إنه ملف إكسل (.xlsx/.xls) أو CSV سليم';
+        render();
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+  function readMappingFromDom(kind){
+    const mapping = {};
+    excelFieldsForKind(kind).forEach(f=>{
+      const sel = document.querySelector(`[data-excel-map="${f.key}"]`);
+      mapping[f.key] = sel ? Number(sel.value) : -1;
+    });
+    return mapping;
+  }
+  function buildImportRows(kind, mapping){
+    const fields = excelFieldsForKind(kind);
+    return excelImport.rows.map(r => {
+      const obj = {};
+      fields.forEach(f => {
+        const idx = mapping[f.key];
+        obj[f.key] = (idx!==undefined && idx>=0 && r[idx]!==undefined) ? String(r[idx]).trim() : '';
+      });
+      const missing = fields.filter(f => f.required && !obj[f.key]);
+      obj.valid = missing.length===0;
+      obj.reason = missing.length ? ('ناقص: ' + missing.map(f=>f.label).join('، ')) : '';
+      return obj;
+    });
+  }
+  function runExcelImport(){
+    if(!excelImport) return;
+    const kind = excelImport.kind;
+    const mapping = readMappingFromDom(kind);
+    excelImport.mapping = mapping;
+    const rows = buildImportRows(kind, mapping).filter(r => r.valid);
+    if(rows.length===0){ showToast('مفيش صفوف صالحة للاستيراد — راجع الأعمدة اللي اخترتها'); render(); return; }
+    askConfirm(`هيتم استيراد ${rows.length} صف. متأكد؟`, () => {
+      if(kind==='fabrics') importFabricRows(rows);
+      else importProductRows(rows);
+    });
+  }
+  function importFabricRows(rows){
+    let added = 0, merged = 0;
+    rows.forEach(r => {
+      const code = r.code.trim(), color = r.color.trim();
+      const qty = Number(r.qty) || 0;
+      if(!code || !color) return;
+      const existing = state.fabrics.find(f => f.code.trim()===code && f.color.trim().toLowerCase()===color.toLowerCase());
+      if(existing){
+        existing.total = (Number(existing.total)||0) + qty;
+        if(r.image) existing.image = r.image;
+        existing.updatedAt = Date.now();
+        merged++;
+      } else {
+        state.fabrics.push({ id: uid(), code, color, total: qty, used:0, image: r.image || null, updatedAt: Date.now() });
+        added++;
+      }
+    });
+    save();
+    excelImport = null;
+    const parts = [];
+    if(added) parts.push(`اتضاف ${added} لون جديد`);
+    if(merged) parts.push(`اتحدثت الكمية لـ ${merged} لون موجود بالفعل`);
+    showToast(parts.join(' و ') || 'تم الاستيراد');
+    render();
+  }
+  function importProductRows(rows){
+    let added = 0, unlinked = 0;
+    rows.forEach(r => {
+      if(!r.name || !r.cut) return;
+      let fabricId = null;
+      if(r.fabric){
+        const q = r.fabric.trim().toLowerCase();
+        let match = state.fabrics.find(f => (f.code+' — '+f.color).toLowerCase()===q || (f.code+' - '+f.color).toLowerCase()===q);
+        if(!match){
+          const byCode = state.fabrics.filter(f => f.code.trim().toLowerCase()===q);
+          if(byCode.length===1) match = byCode[0];
+        }
+        if(match) fabricId = match.id; else unlinked++;
+      }
+      state.products.push({
+        id: uid(), code: r.code || '', name: r.name, cut: r.cut,
+        readyQty: Math.max(0, Number(r.readyQty)||0), fabricId,
+        metersPerPiece: 0, price: r.price ? Number(r.price) : null, image: null,
+        updatedAt: Date.now()
+      });
+      added++;
+    });
+    save();
+    excelImport = null;
+    const parts = [`اتضاف ${added} منتج`];
+    if(unlinked) parts.push(`${unlinked} منهم متربطش بقماش (النص في عمود القماش مطابقش أي قماش مسجل)`);
+    showToast(parts.join(' — '));
+    render();
+  }
+
   function askConfirm(message, onConfirm){
     confirmTarget = {message, onConfirm};
     render();
@@ -713,7 +872,7 @@
       bindLockEvents();
       return;
     }
-    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (confirmTarget? confirmHtml() : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '') + (lightboxImage? lightboxHtml() : '');
+    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '') + (excelImport? excelImportModalHtml() : '') + (confirmTarget? confirmHtml() : '') + (lightboxImage? lightboxHtml() : '');
     bindEvents();
   }
 
@@ -1007,6 +1166,7 @@
         </div>
         <div class="btn-group-wrap">
           ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="exportFabricsCsv">⬇️ تصدير CSV</button>` : ''}
+          <button class="btn ghost sm" data-action="openExcelImport" data-kind="fabrics">📥 استيراد إكسل</button>
           ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="fabrics">${bulk?'إلغاء التحديد':'✓ تحديد متعدد'}</button>` : ''}
           <button class="btn gold" data-action="addFabric">+ إضافة قماش</button>
         </div>
@@ -1071,7 +1231,10 @@
           <h2 class="ticket-title">المنتجات</h2>
           <div class="ticket-meta"><span class="ticket-serial">${serialFor('PRD', state.products.length)}</span><span class="barcode"></span></div>
         </div>
-        <button class="btn gold" data-action="addProduct">+ إضافة منتج</button>
+        <div class="btn-group-wrap">
+          <button class="btn ghost sm" data-action="openExcelImport" data-kind="products">📥 استيراد إكسل</button>
+          <button class="btn gold" data-action="addProduct">+ إضافة منتج</button>
+        </div>
       </div>
       <div class="ticket-perf"></div>
       <div class="ticket-body">
@@ -1446,6 +1609,60 @@
     </div>`;
   }
 
+  function excelImportModalHtml(){
+    const ex = excelImport;
+    const title = ex.kind==='fabrics' ? 'استيراد أقمشة من إكسل' : 'استيراد منتجات من إكسل';
+    if(ex.headers.length===0){
+      return `<div class="overlay">
+        <div class="modal" style="max-width:480px;">
+          <button class="modal-close" data-action="closeExcelImport">✕</button>
+          <h3>${title}</h3>
+          <div class="section-note">اختار ملف إكسل (.xlsx/.xls) أو CSV — أول صف لازم يكون أسماء الأعمدة (عناوين)، وباقي الصفوف بياناتك.</div>
+          ${ex.error ? `<div class="import-error">${escapeHtml(ex.error)}</div>` : ''}
+          <label class="btn gold" style="display:inline-flex;">📁 اختيار ملف<input type="file" accept=".xlsx,.xls,.csv" class="visually-hidden" id="excelFileInput"></label>
+        </div>
+      </div>`;
+    }
+    const fields = excelFieldsForKind(ex.kind);
+    const rows = buildImportRows(ex.kind, ex.mapping);
+    const validCount = rows.filter(r=>r.valid).length;
+    return `<div class="overlay">
+      <div class="modal" style="max-width:640px;">
+        <button class="modal-close" data-action="closeExcelImport">✕</button>
+        <h3>${title}</h3>
+        <div class="section-note">حدد كل عمود في ملفك بيمثل إيه — الحقول اللي فيها * لازم تتحدد، والباقي اختياري.</div>
+        <div class="excel-map-grid">
+        ${fields.map(f=>`
+          <div class="field">
+            <label>${escapeHtml(f.label)}${f.required?' *':''}</label>
+            <select data-excel-map="${f.key}">
+              ${!f.required?`<option value="-1" ${ex.mapping[f.key]===-1?'selected':''}>— تجاهل —</option>`:''}
+              ${ex.headers.map((h,i)=>`<option value="${i}" ${ex.mapping[f.key]===i?'selected':''}>${escapeHtml(h)}</option>`).join('')}
+            </select>
+          </div>`).join('')}
+        </div>
+        ${excelPreviewHtml(rows)}
+        <div class="modal-actions">
+          <button class="btn gold" data-action="runExcelImport" ${validCount===0?'disabled':''}>📥 استيراد ${validCount} صف</button>
+          <button class="btn ghost" data-action="closeExcelImport">إلغاء</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  function excelPreviewHtml(rows){
+    const validCount = rows.filter(r=>r.valid).length;
+    const invalidCount = rows.length - validCount;
+    const sample = rows.slice(0,6);
+    const cols = sample.length ? Object.keys(sample[0]).filter(k=>k!=='valid'&&k!=='reason') : [];
+    return `
+      <div class="muted" style="font-size:12px;margin:10px 0 6px;">معاينة (${rows.length} صف إجمالي — ${validCount} صالح${invalidCount?` — ${invalidCount} هيتجاهل`:''})</div>
+      <div class="table-scroll" style="max-height:220px;">
+        <table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}<th></th></tr></thead><tbody>
+        ${sample.map(r=>`<tr style="${r.valid?'':'opacity:.5;'}">${cols.map(c=>`<td>${escapeHtml(r[c]||'')}</td>`).join('')}<td style="font-size:12px;">${r.valid?'✓':'⚠️ '+escapeHtml(r.reason)}</td></tr>`).join('')}
+        </tbody></table>
+      </div>`;
+  }
+
   // ---------- image field helpers ----------
   // binds upload/clear/url-apply controls for every image field under `root`
   // (the whole app on a normal render, or just a freshly-inserted color row
@@ -1622,6 +1839,21 @@
         backupRestoreInput.value = ''; // allow re-selecting the same file again later
       });
     }
+
+    const excelFileInput = document.getElementById('excelFileInput');
+    if(excelFileInput){
+      excelFileInput.addEventListener('change', () => {
+        const file = excelFileInput.files && excelFileInput.files[0];
+        if(file) handleExcelFile(file);
+      });
+    }
+    app.querySelectorAll('[data-excel-map]').forEach(sel=>{
+      sel.addEventListener('change', () => {
+        if(!excelImport) return;
+        excelImport.mapping[sel.getAttribute('data-excel-map')] = Number(sel.value);
+        render();
+      });
+    });
 
     app.querySelectorAll('[data-nav]').forEach(el=>{
       el.addEventListener('click', ()=>{ view = el.getAttribute('data-nav'); searchQuery = ''; render(); });
@@ -1810,6 +2042,9 @@
         else if(action==='duplicateProduct') duplicateProduct(id);
         else if(action==='toggleTheme') toggleTheme();
         else if(action==='exportBackup') exportBackup();
+        else if(action==='openExcelImport') openExcelImport(el.getAttribute('data-kind'));
+        else if(action==='closeExcelImport') closeExcelImport();
+        else if(action==='runExcelImport') runExcelImport();
         else if(action==='toggleBulkMode') toggleBulkMode(el.getAttribute('data-kind'));
         else if(action==='bulkDeleteFabrics') askConfirm('هل تريد حذف الأصناف المحددة؟', bulkDeleteFabrics);
         else if(action==='bulkDeleteProducts') askConfirm('هل تريد حذف الأصناف المحددة؟', bulkDeleteProducts);

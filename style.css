@@ -304,6 +304,10 @@
 
   .section-note{ font-size:13px; color: var(--ink-soft); margin: -6px 0 14px; }
 
+  /* ---------- import from Excel/CSV (fabrics & products bulk-add) ---------- */
+  .excel-map-grid{ display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+  .import-error{ background: rgba(193,68,46,.08); border:1px dashed var(--red); border-radius:8px; padding:10px 12px; margin:0 0 14px; font-size:13px; color: var(--red-deep); }
+
   /* ---------- search by photo (reverse image match) ---------- */
   .image-match{ margin: -4px 0 16px; }
   .image-match-panel{ display:none; margin-top:10px; background: rgba(0,0,0,.02); border:1px dashed var(--paper-2); border-radius:8px; padding:12px; }
@@ -439,6 +443,7 @@
 
     /* stack side-by-side form fields (name/cut, price/etc.) so they aren't squeezed */
     .field-row{ flex-direction:column; gap:0; }
+    .excel-map-grid{ grid-template-columns:1fr; }
 
     .modal{ padding:18px 16px 16px; max-width:100%; }
     .modal-actions{ flex-wrap:wrap; }

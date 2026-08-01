@@ -54,6 +54,10 @@ python3 -m http.server
   - Paste a direct image URL.
   - Thumbnails then show up in the Fabrics/Products tables and next to each item inside an order.
 - **Search by photo (🖼️ ابحث بالصورة)** — on the Fabrics and Products tabs, next to the text search box, you can upload a photo (e.g. a picture of a roll of fabric) or paste an image URL and compare it against every saved fabric/product photo. Matches are ranked by visual similarity percentage, best match first. This runs entirely in the browser (a lightweight perceptual hash, no server or API involved), so it's fast and works offline once the page is loaded — but it needs items to already have saved photos to compare against, and images loaded from URLs on sites that block cross-origin access can't be analyzed (uploaded photos and pasted results always work).
+- **Photo per color** — when adding a fabric, each color row (added via "+ لون تاني") can have its own photo, uploaded or pasted as a URL, in addition to the fabric's default photo.
+- **Click-to-zoom** — click any thumbnail (fabrics/products tables, order items) to view it full-size; click outside, the ✕, or press Esc to close.
+- **Backup & restore** — the ⬇️/⬆️ buttons in the top bar export all your data (fabrics, products, orders) as a JSON file, and restore from one. Separate from Firebase sync — a local safety net you control.
+- **Import from Excel (📥 استيراد إكسل)** — on the Fabrics and Products tabs, bulk-add many rows at once from an `.xlsx`/`.xls`/`.csv` file. Upload a file (first row = column headers), match your file's columns to the app's fields (best guesses are pre-filled), preview what will be imported, then confirm. Runs entirely in the browser via [SheetJS](https://sheetjs.com/) (loaded from a CDN) — no file data is uploaded anywhere.
 
 ## Notes
 
