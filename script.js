@@ -737,7 +737,7 @@
     const rows = [['الرقم','الاسم','القصة','الجاهز عندك','القماش','متر/قطعة','السعر']];
     state.products.forEach(p=>{
       const f = fabricById(p.fabricId);
-      rows.push([p.code||'', p.name, p.cut, fmt(p.readyQty), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
+      rows.push([p.code||'', p.name, p.cut, fmt(effectiveReadyQty(p)), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
     });
     downloadCsv('products.csv', rows);
   }
