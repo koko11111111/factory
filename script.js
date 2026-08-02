@@ -573,7 +573,7 @@
       produced = fromReady;
       p.readyQty = (Number(p.readyQty)||0) - fromReady;
     }
-    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady });
+    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady, excessToReady: 0 });
     if(fromReady>0){
       showToast(fromReady>=ordered ? `اتغطت الطلبية كلها من المخزون الجاهز (${fmt(fromReady)} قطعة)، مفيش داعي تنتج أكتر` : `اتغطى ${fmt(fromReady)} من ${fmt(ordered)} من المخزون الجاهز، والباقي محتاج إنتاج`);
     }
@@ -583,12 +583,36 @@
     const o = orderById(orderId);
     if(!o) return;
     if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
+    const it = o.items.find(i=>i.id===itemId);
+    if(it){
+      const p = productById(it.productId);
+      if(p){
+        // give back any ready stock this item auto-consumed when created
+        const fromReady = Number(it.producedFromReady)||0;
+        if(fromReady) p.readyQty = (Number(p.readyQty)||0) + fromReady;
+        // remove any surplus this item had credited into ready stock
+        const excess = Number(it.excessToReady)||0;
+        if(excess) p.readyQty = Math.max(0, (Number(p.readyQty)||0) - excess);
+        // release the fabric consumed producing this item (fromReady pieces
+        // didn't consume fabric just now — they were made earlier — so only
+        // the portion produced beyond that counts)
+        if(p.fabricId){
+          const f = fabricById(p.fabricId);
+          if(f){
+            const extraProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
+            const metersUsed = extraProduced * (Number(p.metersPerPiece)||0);
+            f.used = Math.max(0, (Number(f.used)||0) - metersUsed);
+          }
+        }
+      }
+    }
     o.items = o.items.filter(it=>it.id!==itemId);
     save(); render();
   }
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -615,6 +639,28 @@
     } else if(field==="ordered"){
       it.ordered = num;
     }
+
+    // Producing more than this order actually needs (or lowering "ordered"
+    // below what's already produced) leaves a surplus — credit that surplus
+    // back to the product's ready stock (readyQty) so it's available to
+    // auto-fill future orders instead of just vanishing. it.excessToReady
+    // tracks how much surplus we've already credited, so nudging the
+    // numbers up/down repeatedly adjusts readyQty by the difference each
+    // time instead of double-counting.
+    if(field==="produced" || field==="ordered"){
+      const p = productById(it.productId);
+      if(p){
+        const newExcess = Math.max(0, (Number(it.produced)||0) - (Number(it.ordered)||0));
+        const prevExcess = Number(it.excessToReady)||0;
+        const excessDelta = newExcess - prevExcess;
+        if(excessDelta !== 0){
+          p.readyQty = Math.max(0, (Number(p.readyQty)||0) + excessDelta);
+          if(excessDelta > 0) showToast(`الفايض (${fmt(excessDelta)} قطعة) اتضاف للمخزون الجاهز`);
+        }
+        it.excessToReady = newExcess;
+      }
+    }
+
     save(); render();
   }
 
@@ -1793,9 +1839,9 @@
             ${thumbHtml(p&&p.image, p&&p.name)}
             <b>${label}</b>
           </div>
-          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
           <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button>`}</div>
         </div>`;
       }).join('')}
@@ -2009,14 +2055,20 @@
         ${orders.length===0 ? emptyHtml('🕘','لا يوجد سجل سابق لهذا العميل') : orders.map(o=>{
           const pr = orderProgress(o);
           const isCurrent = o.id === historyContextOrderId;
+          const oRev = orderRevenue(o), oPaid = orderPaid(o), oBal = oRev - oPaid;
           return `<div class="ticket mini" style="margin:0;${isCurrent?'border-color:var(--gold, #e9be58);':''}">
             <div class="ticket-stub">
               <div>
                 <h2 class="ticket-title" style="font-size:14px;">${escapeHtml(o.date||'بدون تاريخ')} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span>${isCurrent?' <span class="muted" style="font-size:11px;">(الطلبية الحالية)</span>':''}</h2>
                 <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span></div>
               </div>
+              <button class="btn ghost sm icon-only" data-action="editOrderFromHistory" data-id="${o.id}" title="تعديل بيانات الطلبية (منها المبلغ المدفوع)">✏️</button>
             </div>
             <div class="ticket-body" style="padding-top:8px;">
+            ${(oRev>0 || oPaid>0) ? `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0 8px;">
+              <span class="muted">المدفوع من الطلبية دي</span>
+              <span class="mono">${fmt(oPaid)}${oBal>0?` <span style="color:#C1442E;">(متبقي ${fmt(oBal)})</span>`:''}</span>
+            </div>` : ''}
             ${o.items.length===0 ? '<div class="muted" style="font-size:13px;">لا توجد أصناف</div>' : o.items.map(it=>{
               const p = productById(it.productId);
               return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.06);">
@@ -2555,6 +2607,11 @@
         else if(action==='openCustomerHistoryByName'){ historyModal = el.getAttribute('data-name'); historyContextOrderId = null; render(); }
         else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
+        else if(action==='editOrderFromHistory'){
+          const o = orderById(id);
+          historyModal = null; historyContextOrderId = null;
+          if(o) modalEditOrder(o); else render();
+        }
         else if(action==='openTrash'){ trashModalOpen = true; render(); }
         else if(action==='closeTrash'){ trashModalOpen = false; render(); }
         else if(action==='restoreTrashItem'){
