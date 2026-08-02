@@ -221,8 +221,19 @@
       try{
         const { slim, toUpload, toDelete } = buildSyncState();
         await window.AppSync.saveData(currentUid, slim);
-        await syncImageChanges(currentUid, toUpload, toDelete);
+        try{
+          await syncImageChanges(currentUid, toUpload, toDelete);
+        }catch(imgErr){
+          console.error('[save] image sync failed:', imgErr);
+          const msg = String((imgErr && imgErr.message) || '');
+          if(msg.includes('permission')){
+            showToast("اتحفظت البيانات، بس الصور رفضتها صلاحيات Firestore — تأكد إن قواعد الصور منشورة في Firebase Console");
+          } else {
+            showToast("اتحفظت البيانات، بس تعذرت مزامنة الصور (" + msg.replace('image-sync-failed: ','') + ")");
+          }
+        }
       }catch(e){
+        console.error('[save] data sync failed:', e);
         showToast("اتحفظت البيانات على الجهاز، بس تعذرت المزامنة (تحقق من الإنترنت)");
       }
     }

@@ -135,13 +135,26 @@ window.AppSync = {
       const map = {};
       snap.forEach(d => { map[d.id] = d.data().data; });
       return map;
-    }catch(e){ return {}; }
+    }catch(e){
+      // Swallowed on purpose so a photo-load failure never blocks the rest of
+      // the app from working — but logged so it's not invisible. If you see
+      // "permission-denied" here, the Firestore Rules published in the
+      // Console are missing (or have a typo in) the
+      // workspaces/{uid}/images/{imageId} match block.
+      console.error('[AppSync] loadImages failed:', e.code || e.message || e);
+      return {};
+    }
   },
   async saveImage(uid, imageId, dataUrl){
-    await setDoc(imageDoc(uid, imageId), { data: dataUrl, updatedAt: Date.now() });
+    try{
+      await setDoc(imageDoc(uid, imageId), { data: dataUrl, updatedAt: Date.now() });
+    }catch(e){
+      console.error('[AppSync] saveImage failed:', e.code || e.message || e);
+      throw new Error('image-sync-failed: ' + (e.code || e.message || 'unknown'));
+    }
   },
   async deleteImage(uid, imageId){
-    try{ await deleteDoc(imageDoc(uid, imageId)); }catch(e){ /* already gone, fine */ }
+    try{ await deleteDoc(imageDoc(uid, imageId)); }catch(e){ console.error('[AppSync] deleteImage failed:', e.code || e.message || e); }
   },
   // live updates from other devices: fires with { imageId: dataURL|null, ... }
   // for whatever changed since the last event (null = photo was removed)
