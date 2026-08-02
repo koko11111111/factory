@@ -275,13 +275,25 @@
   // ready, same as manually-entered readyQty. `producedFromReady` (set once
   // when the order item is created) is excluded so ready stock that was
   // already drawn down to cover that order isn't counted twice.
+  // How many unsold, newly-made units of this order item are sitting as
+  // physical surplus. `producedFromReady` pieces were already pulled out of
+  // stock (and removed from it) back when the item was created, so selling
+  // up to that many pieces doesn't touch the newly-made pool at all — only
+  // sales BEYOND that amount eat into it. (Previously this subtracted the
+  // full `sold` count, which wrongly zeroed out real surplus any time an
+  // order had been auto-filled from ready stock at creation.)
+  function orderItemSurplus(it){
+    const fromReady = Number(it.producedFromReady)||0;
+    const newlyProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
+    const soldBeyondReady = Math.max(0, (Number(it.sold)||0) - fromReady);
+    return Math.max(0, newlyProduced - soldBeyondReady);
+  }
   function productSurplusReady(productId){
     let surplus = 0;
     state.orders.forEach(o=>{
       o.items.forEach(it=>{
         if(it.productId !== productId) return;
-        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
-        surplus += Math.max(0, newlyProduced - (Number(it.sold)||0));
+        surplus += orderItemSurplus(it);
       });
     });
     return surplus;
@@ -590,8 +602,7 @@
       sources.sort((a,b)=> (a.o.date||'').localeCompare(b.o.date||''));
       for(const {it} of sources){
         if(remaining <= 0) break;
-        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
-        const surplus = Math.max(0, newlyProduced - (Number(it.sold)||0));
+        const surplus = orderItemSurplus(it);
         const take = Math.min(remaining, surplus);
         if(take > 0){
           it.produced = (Number(it.produced)||0) - take;
