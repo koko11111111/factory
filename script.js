@@ -8,9 +8,17 @@
     factoryName: "مصنع الأقمشة",
     fabrics: [],   // {id, code, color, total, used, image, costPerMeter(nullable, EGP/meter)}
     products: [],  // {id, code, name, cut, readyQty(units already made & in stock), fabricId(nullable), metersPerPiece, price, image, laborCostPerPiece(nullable, EGP/piece)}
-    orders: [],    // {id, name, date, dueDate(nullable, expected delivery), items:[{id, productId, ordered, produced, sold}]}
-    overheadMonthly: 0 // flat monthly overhead (rent, fixed salaries, electricity...) — subtracted once from the profit total, not per-item
+    orders: [],    // {id, name, date, dueDate(nullable, expected delivery), paid(EGP received so far), items:[{id, productId, ordered, produced, sold}]}
+    overheadMonthly: 0, // flat monthly overhead (rent, fixed salaries, electricity...) — subtracted once from the profit total, not per-item
+    // ---- trash (soft delete) ----
+    // Deleted fabrics/products/orders land here (with a deletedAt timestamp)
+    // instead of vanishing immediately, so an accidental delete can be undone.
+    // Photos are dropped when trashing (see deleteFabric/deleteProduct) so the
+    // synced Firestore document doesn't balloon with base64 images nobody can
+    // see anymore. Purged automatically after TRASH_DAYS (see purgeOldTrash).
+    trash: { fabrics: [], products: [], orders: [] }
   };
+  const TRASH_DAYS = 30;
 
   let view = "dashboard"; // dashboard | fabrics | products | orders | orderDetail
   let activeOrderId = null;
@@ -22,6 +30,7 @@
   let excelImport = null; // {kind:'fabrics'|'products', headers:[], rows:[][], mapping:{field:colIndex}, error} or null when closed
   let searchQuery = "";
   let showCompletedOrders = false; // Orders tab: toggle to reveal completed/archived orders
+  let trashModalOpen = false; // 🗑️ trash/undo-delete overlay, toggled from the top bar
 
   // ---------- sorting (fabrics/products tables) ----------
   let sortState = { fabrics: {by:'', dir:1}, products: {by:'', dir:1} };
@@ -147,6 +156,7 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if(raw) state = Object.assign(state, JSON.parse(raw));
     }catch(e){ /* ignore */ }
+    purgeOldTrash();
 
     await waitForAppSync();
 
@@ -170,6 +180,7 @@
         if(remote){
           expandImagesInPlace(remote, remoteImageCache);
           state = Object.assign(state, remote);
+          purgeOldTrash();
         } else {
           // first login: seed the cloud with local data (photos go to their own docs, not inline)
           const { slim, toUpload } = buildSyncState();
@@ -329,6 +340,53 @@
     return { revenue, materialCost, laborCost, grossProfit, overhead, netProfit, knownSold, unknownSold };
   }
 
+  // ---------- trash (soft delete) ----------
+  function purgeOldTrash(){
+    const cutoff = Date.now() - TRASH_DAYS*24*60*60*1000;
+    if(!state.trash) state.trash = { fabrics: [], products: [], orders: [] };
+    ['fabrics','products','orders'].forEach(kind=>{
+      state.trash[kind] = (state.trash[kind]||[]).filter(item => (item.deletedAt||0) >= cutoff);
+    });
+  }
+  function trashCount(){
+    if(!state.trash) return 0;
+    return (state.trash.fabrics||[]).length + (state.trash.products||[]).length + (state.trash.orders||[]).length;
+  }
+
+  // ---------- order money (revenue billed vs. paid so far) ----------
+  // Revenue is based on units actually SOLD (same basis as computeProfitSummary/
+  // totalRevenue above), not just ordered — an order isn't "worth" its full
+  // price until the pieces are marked sold.
+  function orderRevenue(o){
+    let s = 0;
+    o.items.forEach(it=>{
+      const p = productById(it.productId);
+      if(p && p.price) s += (Number(it.sold)||0) * Number(p.price);
+    });
+    return s;
+  }
+  function orderPaid(o){ return Number(o.paid)||0; }
+  function orderBalance(o){ return orderRevenue(o) - orderPaid(o); }
+
+  // ---------- customers (derived from order names — see modalCustomerLookup) ----------
+  function customersList(){
+    const map = new Map(); // lowercased name -> {name, orders:[]}
+    state.orders.forEach(o=>{
+      const name = (o.name||'').trim();
+      if(!name) return;
+      const key = name.toLowerCase();
+      if(!map.has(key)) map.set(key, { name, orders: [] });
+      map.get(key).orders.push(o);
+    });
+    return Array.from(map.values()).map(c=>{
+      const revenue = c.orders.reduce((s,o)=>s+orderRevenue(o),0);
+      const paid = c.orders.reduce((s,o)=>s+orderPaid(o),0);
+      const activeCount = c.orders.filter(o=>!orderProgress(o).complete).length;
+      const lastDate = c.orders.reduce((max,o)=> (o.date && o.date>max) ? o.date : max, '');
+      return { name: c.name, ordersCount: c.orders.length, activeCount, revenue, paid, balance: revenue-paid, lastDate };
+    }).sort((a,b)=> (b.lastDate||'').localeCompare(a.lastDate||''));
+  }
+
   function totalRemainingMeters(){
     return state.fabrics.reduce((s,f)=> s + fabricRemaining(f), 0);
   }
@@ -414,8 +472,11 @@
   function deleteFabric(id){
     const used = state.products.some(p=>p.fabricId===id);
     if(used){ showToast("لا يمكن حذف قماش مستخدم في منتج"); return; }
+    const f = fabricById(id);
+    if(f) state.trash.fabrics.push({ ...f, image:null, deletedAt: Date.now() });
     state.fabrics = state.fabrics.filter(f=>f.id!==id);
-    save(); showToast("تم حذف القماش"); render();
+    purgeOldTrash();
+    save(); showToast("تم حذف القماش (تقدر تسترجعه من 🗑️ خلال ٣٠ يوم)"); render();
   }
 
   function addProduct(vals){
@@ -461,8 +522,11 @@
   function deleteProduct(id){
     const used = state.orders.some(o=>o.items.some(it=>it.productId===id));
     if(used){ showToast("لا يمكن حذف منتج مستخدم في طلبية"); return; }
+    const p = productById(id);
+    if(p) state.trash.products.push({ ...p, image:null, deletedAt: Date.now() });
     state.products = state.products.filter(p=>p.id!==id);
-    save(); showToast("تم حذف المنتج"); render();
+    purgeOldTrash();
+    save(); showToast("تم حذف المنتج (تقدر تسترجعه من 🗑️ خلال ٣٠ يوم)"); render();
   }
   // duplicate/clone a product for near-identical variants (same cut, different color) —
   // copies everything except readyQty (starts at 0) and opens the edit modal so you can
@@ -478,7 +542,7 @@
   }
 
   function addOrder(vals){
-    const o = { id: uid(), name: vals.name.trim(), date: vals.date, dueDate: vals.dueDate || null, items: [] };
+    const o = { id: uid(), name: vals.name.trim(), date: vals.date, dueDate: vals.dueDate || null, paid: 0, items: [] };
     state.orders.push(o);
     save(); render();
     activeOrderId = o.id; view = "orderDetail"; render();
@@ -487,12 +551,16 @@
     const o = orderById(id);
     if(!o) return;
     o.name = vals.name.trim(); o.date = vals.date; o.dueDate = vals.dueDate || null;
+    o.paid = vals.paid!=null && vals.paid!=='' ? Math.max(0, Number(vals.paid)||0) : 0;
     save(); showToast("تم تعديل الطلبية"); render();
   }
   function deleteOrder(id){
+    const o = orderById(id);
+    if(o) state.trash.orders.push({ ...o, deletedAt: Date.now() });
     state.orders = state.orders.filter(o=>o.id!==id);
     if(activeOrderId===id){ activeOrderId=null; view="orders"; }
-    save(); showToast("تم حذف الطلبية"); render();
+    purgeOldTrash();
+    save(); showToast("تم حذف الطلبية (تقدر تسترجعها من 🗑️ خلال ٣٠ يوم)"); render();
   }
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
@@ -643,8 +711,10 @@
     if(ids.length===0) return;
     const blocked = ids.filter(id => state.products.some(p=>p.fabricId===id));
     const toDelete = ids.filter(id => !blocked.includes(id));
+    toDelete.forEach(id=>{ const f = fabricById(id); if(f) state.trash.fabrics.push({ ...f, image:null, deletedAt: Date.now() }); });
     state.fabrics = state.fabrics.filter(f => !toDelete.includes(f.id));
     selection.fabrics.clear();
+    purgeOldTrash();
     save();
     showToast(blocked.length ? `اتحذف ${toDelete.length}، وتعذر حذف ${blocked.length} (مستخدم في منتج)` : `اتحذف ${toDelete.length} قماش`);
     render();
@@ -654,8 +724,10 @@
     if(ids.length===0) return;
     const blocked = ids.filter(id => state.orders.some(o=>o.items.some(it=>it.productId===id)));
     const toDelete = ids.filter(id => !blocked.includes(id));
+    toDelete.forEach(id=>{ const p = productById(id); if(p) state.trash.products.push({ ...p, image:null, deletedAt: Date.now() }); });
     state.products = state.products.filter(p => !toDelete.includes(p.id));
     selection.products.clear();
+    purgeOldTrash();
     save();
     showToast(blocked.length ? `اتحذف ${toDelete.length}، وتعذر حذف ${blocked.length} (مستخدم في طلبية)` : `اتحذف ${toDelete.length} منتج`);
     render();
@@ -663,9 +735,11 @@
   function bulkDeleteOrders(){
     const ids = Array.from(selection.orders);
     if(ids.length===0) return;
+    ids.forEach(id=>{ const o = orderById(id); if(o) state.trash.orders.push({ ...o, deletedAt: Date.now() }); });
     state.orders = state.orders.filter(o => !ids.includes(o.id));
     if(ids.includes(activeOrderId)){ activeOrderId=null; view='orders'; }
     selection.orders.clear();
+    purgeOldTrash();
     save();
     showToast(`اتحذفت ${ids.length} طلبية`);
     render();
@@ -824,7 +898,8 @@
       fields: [
         {key:'name', label:'اسم الطلبية / العميل', type:'text', value:o.name, required:true},
         {key:'date', label:'التاريخ', type:'date', value:o.date, required:true},
-        {key:'dueDate', label:'تاريخ التسليم المتوقع (اختياري)', type:'date', value:o.dueDate||''}
+        {key:'dueDate', label:'تاريخ التسليم المتوقع (اختياري)', type:'date', value:o.dueDate||''},
+        {key:'paid', label:'المبلغ المدفوع من العميل حتى الآن (جنيه)', type:'number', step:'0.01', value:o.paid||'', required:false}
       ],
       onSubmit: vals => editOrder(o.id, vals)
     });
@@ -886,7 +961,9 @@
           factoryName: incoming.factoryName || state.factoryName,
           fabrics: incoming.fabrics,
           products: incoming.products,
-          orders: incoming.orders
+          orders: incoming.orders,
+          overheadMonthly: incoming.overheadMonthly || 0,
+          trash: incoming.trash || { fabrics: [], products: [], orders: [] }
         };
         save();
         showToast('اترجعت النسخة الاحتياطية بنجاح');
@@ -1067,7 +1144,7 @@
       bindLockEvents();
       return;
     }
-    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '') + (excelImport? excelImportModalHtml() : '') + (confirmTarget? confirmHtml() : '') + (lightboxImage? lightboxHtml() : '');
+    app.innerHTML = topbarHtml() + tabsHtml() + viewHtml() + (modal? modalHtml(modal) : '') + (changePasswordModal? changePasswordModalHtml() : '') + (historyModal? customerHistoryHtml() : '') + (excelImport? excelImportModalHtml() : '') + (trashModalOpen? trashHtml() : '') + (confirmTarget? confirmHtml() : '') + (lightboxImage? lightboxHtml() : '');
     bindEvents();
   }
 
@@ -1107,6 +1184,7 @@
         <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
         ${overdue>0 ? `<div class="qstat"><b style="color:#C1442E">${overdue}</b><span>طلبية متأخرة ⚠️</span></div>` : ''}
         <button class="btn ghost sm icon-only" data-action="toggleTheme" title="${theme==='dark'?'وضع فاتح':'وضع غامق'}" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${theme==='dark'?'☀️':'🌙'}</button>
+        <button class="btn ghost sm icon-only" data-action="openTrash" title="سلة المحذوفات" style="color:var(--paper); border-color:rgba(233,190,88,.35); position:relative;">🗑️${trashCount()>0?`<span class="trash-badge">${trashCount()}</span>`:''}</button>
         <button class="btn ghost sm icon-only" data-action="exportBackup" title="تنزيل نسخة احتياطية من كل البيانات" style="color:var(--paper); border-color:rgba(233,190,88,.35);">⬇️</button>
         <label class="btn ghost sm icon-only image-upload-btn" title="استرجاع نسخة احتياطية من ملف" style="color:var(--paper); border-color:rgba(233,190,88,.35);">⬆️<input type="file" accept="application/json,.json" class="visually-hidden" id="backupRestoreInput"></label>
         ${currentUid ? `
@@ -1182,7 +1260,8 @@
       {id:'dashboard', label:'الرئيسية'},
       {id:'fabrics', label:'الأقمشة'},
       {id:'products', label:'المنتجات'},
-      {id:'orders', label:'الطلبات'}
+      {id:'orders', label:'الطلبات'},
+      {id:'customers', label:'العملاء'}
     ];
     const cur = (view==='orderDetail') ? 'orders' : view;
     return `<div class="tabs">` + tabs.map(t=>
@@ -1196,6 +1275,7 @@
     if(view==='products') return productsHtml();
     if(view==='orders') return ordersHtml();
     if(view==='orderDetail') return orderDetailHtml();
+    if(view==='customers') return customersHtml();
     return '';
   }
 
@@ -1266,6 +1346,34 @@
         <div class="muted" style="font-size:13px;">بناءً على أسعار المنتجات المسجّلة</div>
       </div>
     </div>` : ''}
+
+    ${(() => {
+      const rbm = revenueByMonth();
+      if(!rbm) return '';
+      return `<div class="ticket">
+      <div class="ticket-stub"><h2 class="ticket-title">📈 الإيرادات الشهرية</h2></div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">${revenueBarChartSvg(rbm)}
+        <div class="muted" style="font-size:12px;margin-top:6px;">آخر ${rbm.length} شهر فيهم مبيعات، حسب تاريخ الطلبية</div>
+      </div>
+    </div>`;
+    })()}
+
+    ${(() => {
+      const totalBalance = state.orders.reduce((s,o)=> s + Math.max(0, orderBalance(o)), 0);
+      if(totalBalance<=0) return '';
+      return `<div class="ticket">
+      <div class="ticket-stub">
+        <h2 class="ticket-title">🧾 مستحق من العملاء</h2>
+        <button class="btn ghost sm" data-nav="customers">عرض العملاء</button>
+      </div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+        <div style="font-size:26px;color:#C1442E;" class="mono">${fmt(totalBalance)}</div>
+        <div class="muted" style="font-size:13px;">إجمالي المتبقي على كل الطلبات (بعد خصم المدفوع)</div>
+      </div>
+    </div>`;
+    })()}
 
     ${(() => {
       const ps = computeProfitSummary();
@@ -1356,6 +1464,47 @@
       <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="24" font-weight="700" fill="var(--ink)">${stats.total}</text>
       <text x="${cx}" y="${cy + 17}" text-anchor="middle" font-family="'IBM Plex Sans Arabic'" font-size="11" fill="var(--ink-soft)">قطعة مباعة</text>
     </svg>`;
+  }
+
+  // ---------- monthly revenue (dashboard bar chart) ----------
+  const AR_MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  function monthLabelAr(ym){
+    const parts = ym.split('-');
+    const mi = Number(parts[1]) - 1;
+    return (AR_MONTHS[mi]||ym) + ' ' + parts[0];
+  }
+  // Revenue grouped by the order's own date (not a separate "sale date", which
+  // the app doesn't track) — an approximation, but the best available signal.
+  // Returns the last 6 months that actually had revenue, oldest first.
+  function revenueByMonth(){
+    const map = new Map();
+    state.orders.forEach(o=>{
+      if(!o.date) return;
+      const rev = orderRevenue(o);
+      if(rev<=0) return;
+      const key = o.date.slice(0,7);
+      map.set(key, (map.get(key)||0) + rev);
+    });
+    if(map.size===0) return null;
+    const months = Array.from(map.keys()).sort().slice(-6);
+    return months.map(m=>({ key:m, label: monthLabelAr(m), total: map.get(m) }));
+  }
+  function revenueBarChartSvg(data){
+    const w = 560, h = 190, padL = 8, padR = 8, padT = 14, padB = 30, gap = 16;
+    const max = Math.max(...data.map(d=>d.total), 1);
+    const innerW = w - padL - padR;
+    const barW = (innerW - gap*(data.length-1)) / data.length;
+    const bars = data.map((d,i)=>{
+      const bh = Math.max(3, Math.round((d.total/max) * (h-padT-padB)));
+      const x = padL + i*(barW+gap);
+      const y = h - padB - bh;
+      return `<g>
+        <rect x="${x}" y="${y}" width="${barW}" height="${bh}" rx="5" fill="var(--gold)"><title>${escapeHtml(d.label)}: ${fmt(d.total)}</title></rect>
+        <text x="${x+barW/2}" y="${y-6}" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="11" font-weight="600" fill="var(--ink)">${fmt(d.total)}</text>
+        <text x="${x+barW/2}" y="${h-padB+16}" text-anchor="middle" font-family="'IBM Plex Sans Arabic'" font-size="11" fill="var(--ink-soft)">${escapeHtml(d.label)}</text>
+      </g>`;
+    }).join('');
+    return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" role="img" aria-label="الإيرادات الشهرية">${bars}</svg>`;
   }
 
   function fabricsHtml(){
@@ -1539,6 +1688,37 @@
     `;
   }
 
+  function customersHtml(){
+    const all = customersList();
+    const list = all.filter(c => matches(c.name));
+    return `
+    <div class="toolbar">
+      <h2 class="ticket-title">العملاء</h2>
+      <div class="toolbar-search">${all.length>0 ? searchRowHtml('ابحث باسم العميل...') : ''}</div>
+    </div>
+    <div class="section-note">قائمة مبنية تلقائيًا من أسماء الطلبيات — كل الطلبيات بنفس الاسم بتتجمع هنا كعميل واحد.</div>
+    ${all.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🧑‍🤝‍🧑','لا يوجد عملاء بعد. بيتكوّن العميل تلقائيًا أول ما تنشئ طلبية باسمه.')}</div></div>` :
+      list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد نتائج مطابقة للبحث')}</div></div>` : `
+    <div class="ticket">
+      <div class="ticket-body">
+      <div class="table-scroll"><table><thead><tr>
+        <th>العميل</th><th>الطلبات</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>آخر طلبية</th><th></th>
+      </tr></thead><tbody>
+      ${list.map(c=>`<tr data-open-customer="${escapeHtml(c.name)}">
+        <td><b>${escapeHtml(c.name)}</b></td>
+        <td class="num mono">${c.ordersCount}${c.activeCount>0?` <span class="muted">(${c.activeCount} نشطة)</span>`:''}</td>
+        <td class="num mono">${fmt(c.revenue)}</td>
+        <td class="num mono">${fmt(c.paid)}</td>
+        <td class="num mono" style="color:${c.balance>0?'#C1442E':'inherit'}">${fmt(c.balance)}</td>
+        <td class="muted" style="font-size:12.5px;">${escapeHtml(c.lastDate||'—')}</td>
+        <td class="row-actions"><button class="btn ghost sm" data-action="openCustomerHistoryByName" data-name="${escapeHtml(c.name)}" onclick="event.stopPropagation()">🕘 السجل</button></td>
+      </tr>`).join('')}
+      </tbody></table></div>
+      </div>
+    </div>`}
+    `;
+  }
+
   function modalCustomerLookup(){
     const names = Array.from(new Set(state.orders.map(o => (o.name||'').trim()).filter(Boolean)));
     const options = names.sort((a,b)=>a.localeCompare(b,'ar')).map(n => ({ id:n, label:n }));
@@ -1594,6 +1774,16 @@
           <div class="progress sold"><div style="width:${pr.soldPct}%"></div></div>
         </div>
       </div>
+
+      ${(() => {
+        const orderRev = orderRevenue(o), orderPd = orderPaid(o), orderBal = orderRev - orderPd;
+        if(orderRev<=0 && orderPd<=0) return '';
+        return `<div class="table-scroll" style="margin-bottom:18px;"><table><tbody>
+          <tr><td>قيمة المباع من الطلبية</td><td class="num mono">${fmt(orderRev)}</td></tr>
+          <tr><td>المدفوع</td><td class="num mono">${fmt(orderPd)}</td></tr>
+          <tr><td><b>المتبقي</b></td><td class="num mono" style="color:${orderBal>0?'#C1442E':'#2F6F6B'}"><b>${fmt(orderBal)}</b></td></tr>
+        </tbody></table></div>`;
+      })()}
 
       ${o.items.length===0 ? emptyHtml('📋','لا توجد أصناف في هذه الطلبية بعد.') : o.items.map(it=>{
         const p = productById(it.productId);
@@ -1801,11 +1991,19 @@
     const name = (historyModal||'').trim();
     if(!name){ return ''; }
     const orders = customerOrders(name);
+    const totalRev = orders.reduce((s,o)=>s+orderRevenue(o),0);
+    const totalPaid = orders.reduce((s,o)=>s+orderPaid(o),0);
+    const totalBal = totalRev - totalPaid;
     return `<div class="overlay">
       <div class="modal" style="max-width:560px;">
         <button class="modal-close" data-action="closeHistoryModal">✕</button>
         <h3>🕘 سجل العميل: ${escapeHtml(name)}</h3>
         <div class="muted" style="font-size:12px;margin:-8px 0 14px;">${orders.length} طلبية بنفس الاسم</div>
+        ${(totalRev>0 || totalPaid>0) ? `<div class="table-scroll" style="margin-bottom:14px;"><table><tbody>
+          <tr><td>إجمالي القيمة</td><td class="num mono">${fmt(totalRev)}</td></tr>
+          <tr><td>المدفوع</td><td class="num mono">${fmt(totalPaid)}</td></tr>
+          <tr><td><b>المتبقي</b></td><td class="num mono" style="color:${totalBal>0?'#C1442E':'#2F6F6B'}"><b>${fmt(totalBal)}</b></td></tr>
+        </tbody></table></div>` : ''}
         <button class="btn gold sm" data-action="addOrderForCustomer" data-name="${escapeHtml(name)}" style="margin-bottom:14px;">+ طلبية جديدة لنفس العميل</button>
         <div style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
         ${orders.length===0 ? emptyHtml('🕘','لا يوجد سجل سابق لهذا العميل') : orders.map(o=>{
@@ -1829,6 +2027,72 @@
             </div>
           </div>`;
         }).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function restoreFabric(id){
+    const idx = state.trash.fabrics.findIndex(f=>f.id===id);
+    if(idx<0) return;
+    const item = { ...state.trash.fabrics[idx] };
+    delete item.deletedAt;
+    state.trash.fabrics.splice(idx,1);
+    state.fabrics.push(item);
+    save(); showToast("اترجع القماش — الصورة (لو كانت موجودة) محتاجة تتضاف تاني"); render();
+  }
+  function restoreProduct(id){
+    const idx = state.trash.products.findIndex(p=>p.id===id);
+    if(idx<0) return;
+    const item = { ...state.trash.products[idx] };
+    delete item.deletedAt;
+    state.trash.products.splice(idx,1);
+    state.products.push(item);
+    save(); showToast("اترجع المنتج — الصورة (لو كانت موجودة) محتاجة تتضاف تاني"); render();
+  }
+  function restoreOrder(id){
+    const idx = state.trash.orders.findIndex(o=>o.id===id);
+    if(idx<0) return;
+    const item = { ...state.trash.orders[idx] };
+    delete item.deletedAt;
+    state.trash.orders.splice(idx,1);
+    state.orders.push(item);
+    save(); showToast("اترجعت الطلبية"); render();
+  }
+  function purgeTrashItem(kind, id){
+    if(!state.trash[kind]) return;
+    state.trash[kind] = state.trash[kind].filter(x=>x.id!==id);
+    save(); render();
+  }
+  function trashKindLabel(kind){ return kind==='fabrics'?'أقمشة':kind==='products'?'منتجات':'طلبات'; }
+  function trashHtml(){
+    const daysLeft = (deletedAt) => Math.max(0, Math.ceil((deletedAt + TRASH_DAYS*86400000 - Date.now())/86400000));
+    const count = trashCount();
+    function section(kind, items, labelFn){
+      if(items.length===0) return '';
+      return `<div class="muted" style="font-size:12px;margin:14px 0 6px;">${trashKindLabel(kind)} (${items.length})</div>` +
+        items.slice().reverse().map(it=>`<div class="trash-row">
+          <div>
+            <b>${escapeHtml(labelFn(it))}</b>
+            <div class="muted" style="font-size:11px;">هيتحذف نهائيًا خلال ${daysLeft(it.deletedAt)} يوم</div>
+          </div>
+          <div class="btn-group-wrap">
+            <button class="btn ghost sm" data-action="restoreTrashItem" data-kind="${kind}" data-id="${it.id}">↩️ استرجاع</button>
+            <button class="btn red sm icon-only" data-action="purgeTrashItem" data-kind="${kind}" data-id="${it.id}" title="حذف نهائي">✕</button>
+          </div>
+        </div>`).join('');
+    }
+    return `<div class="overlay">
+      <div class="modal" style="max-width:520px;">
+        <button class="modal-close" data-action="closeTrash">✕</button>
+        <h3>🗑️ سلة المحذوفات</h3>
+        <div class="muted" style="font-size:12px;margin:-8px 0 14px;">العناصر المحذوفة بتتحذف نهائيًا تلقائيًا بعد ${TRASH_DAYS} يوم من حذفها</div>
+        <div style="max-height:55vh;overflow-y:auto;">
+        ${count===0 ? emptyHtml('🗑️','سلة المحذوفات فاضية') :
+          section('fabrics', state.trash.fabrics, f=>f.code+' — '+f.color) +
+          section('products', state.trash.products, p=>p.name+' — '+p.cut) +
+          section('orders', state.trash.orders, o=>o.name)
+        }
         </div>
       </div>
     </div>`;
@@ -2084,6 +2348,9 @@
       el.addEventListener('click', ()=>{ view = el.getAttribute('data-nav'); searchQuery = ''; render(); });
     });
 
+    app.querySelectorAll('[data-open-customer]').forEach(el=>{
+      el.addEventListener('click', ()=>{ historyModal = el.getAttribute('data-open-customer'); historyContextOrderId = null; render(); });
+    });
     app.querySelectorAll('[data-open-order]').forEach(el=>{
       el.addEventListener('click', ()=>{ activeOrderId = el.getAttribute('data-open-order'); view='orderDetail'; render(); });
     });
@@ -2285,8 +2552,21 @@
         else if(action==='deleteOrderItem') deleteOrderItem(el.getAttribute('data-order'), el.getAttribute('data-item'));
         else if(action==='closeModal') closeModal();
         else if(action==='openCustomerHistory'){ const o = orderById(id); if(o){ historyModal = o.name; historyContextOrderId = id; } render(); }
+        else if(action==='openCustomerHistoryByName'){ historyModal = el.getAttribute('data-name'); historyContextOrderId = null; render(); }
         else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
+        else if(action==='openTrash'){ trashModalOpen = true; render(); }
+        else if(action==='closeTrash'){ trashModalOpen = false; render(); }
+        else if(action==='restoreTrashItem'){
+          const kind = el.getAttribute('data-kind');
+          if(kind==='fabrics') restoreFabric(id);
+          else if(kind==='products') restoreProduct(id);
+          else if(kind==='orders') restoreOrder(id);
+        }
+        else if(action==='purgeTrashItem'){
+          const kind = el.getAttribute('data-kind');
+          askConfirm('حذف نهائي؟ مش هينفع ترجعه بعد كده.', ()=>purgeTrashItem(kind, id));
+        }
         else if(action==='closeLightbox'){ lightboxImage = null; render(); }
         else if(action==='addOrderForCustomer'){ const customerName = el.getAttribute('data-name'); historyModal = null; historyContextOrderId = null; modalAddOrder(customerName); }
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }

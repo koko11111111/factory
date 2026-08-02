@@ -332,6 +332,16 @@
 
   /* ---------- header button groups (wrap gracefully on narrow tickets) ---------- */
   .btn-group-wrap{ display:flex; gap:8px; flex-wrap:wrap; }
+  .trash-badge{
+    position:absolute; top:-6px; left:-6px; min-width:16px; height:16px; padding:0 3px;
+    border-radius:999px; background: var(--red); color:#fff; font-size:10px; font-weight:800;
+    display:flex; align-items:center; justify-content:center; line-height:1;
+  }
+  .trash-row{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:9px 4px; border-bottom:1px solid var(--paper-2); font-size:13.5px;
+  }
+  .trash-row:last-child{ border-bottom:none; }
 
   /* ---------- horizontally-scrollable tables (mobile) ---------- */
   .table-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
@@ -348,6 +358,8 @@
   .toolbar > .btn{ flex:0 0 auto; }
 
   .order-card{ cursor:pointer; }
+  tr[data-open-customer]{ cursor:pointer; }
+  tr[data-open-customer]:hover{ background: var(--paper-2); }
   .order-card:hover{ box-shadow: 0 12px 34px rgba(0,0,0,.34); }
   .back-link{ display:inline-flex; align-items:center; gap:6px; color: var(--paper); background:none; border:none; font-size:14px; margin-bottom:14px; font-weight:600; }
   .back-link:hover{ text-decoration:underline; }

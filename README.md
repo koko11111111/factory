@@ -57,6 +57,9 @@ python3 -m http.server
 - **Click-to-zoom** — click any thumbnail (fabrics/products tables, order items) to view it full-size; click outside, the ✕, or press Esc to close.
 - **Backup & restore** — the ⬇️/⬆️ buttons in the top bar export all your data (fabrics, products, orders) as a JSON file, and restore from one. Separate from Firebase sync — a local safety net you control.
 - **Import from Excel (📥 استيراد إكسل)** — on the Fabrics and Products tabs, bulk-add many rows at once from an `.xlsx`/`.xls`/`.csv` file. Upload a file (first row = column headers), match your file's columns to the app's fields (best guesses are pre-filled), preview what will be imported, then confirm. Runs entirely in the browser via [SheetJS](https://sheetjs.com/) (loaded from a CDN) — no file data is uploaded anywhere.
+- **Customers (العملاء)** — a dedicated tab that automatically groups every order by customer name into a profile: order count, total value (based on units actually sold), amount paid, and outstanding balance. Amount paid is editable from an order's ✏️ edit button. Click a customer to see their full order history with a running total.
+- **Dashboard charts** — a monthly revenue bar chart (last 6 months with sales) alongside the existing best-selling-products donut chart, plus a total "owed by customers" figure when any balance is outstanding.
+- **Trash / undo delete (🗑️)** — deleting a fabric, product, or order (single or bulk) moves it to a trash bin instead of erasing it immediately. Restore it anytime within 30 days from the 🗑️ button in the top bar, after which it's purged automatically. Note: photos are not kept in the trash (to keep the synced data small), so a restored fabric/product will need its photo re-added if it had one.
 
 ## Notes
 
