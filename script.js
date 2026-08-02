@@ -6,9 +6,10 @@
 
   let state = {
     factoryName: "مصنع الأقمشة",
-    fabrics: [],   // {id, code, color, total, used, image}
-    products: [],  // {id, code, name, cut, readyQty(units already made & in stock), fabricId(nullable), metersPerPiece, price, image}
-    orders: []     // {id, name, date, dueDate(nullable, expected delivery), items:[{id, productId, ordered, produced, sold}]}
+    fabrics: [],   // {id, code, color, total, used, image, costPerMeter(nullable, EGP/meter)}
+    products: [],  // {id, code, name, cut, readyQty(units already made & in stock), fabricId(nullable), metersPerPiece, price, image, laborCostPerPiece(nullable, EGP/piece)}
+    orders: [],    // {id, name, date, dueDate(nullable, expected delivery), items:[{id, productId, ordered, produced, sold}]}
+    overheadMonthly: 0 // flat monthly overhead (rent, fixed salaries, electricity...) — subtracted once from the profit total, not per-item
   };
 
   let view = "dashboard"; // dashboard | fabrics | products | orders | orderDetail
@@ -270,6 +271,53 @@
   }
   function orderById(id){ return state.orders.find(o=>o.id===id); }
 
+  // ---------- profit (revenue − material − labor − overhead) ----------
+  // Every layer here is optional and degrades gracefully: an item with no
+  // price, or a fabric with no cost/meter set, is simply excluded from the
+  // profit total (and counted in `unknown`) instead of being treated as 0 —
+  // so partial data never quietly understates the real profit.
+  function fabricCostPerMeter(f){
+    const v = f && f.costPerMeter;
+    return (v===null || v===undefined || v==='') ? null : Number(v);
+  }
+  // returns null if the product uses a fabric whose cost/meter isn't set (unknown material cost),
+  // otherwise the material cost per single piece (0 if the product doesn't use fabric at all).
+  function productMaterialCostPerPiece(p){
+    if(!p.fabricId) return 0;
+    const f = fabricById(p.fabricId);
+    const cpm = f ? fabricCostPerMeter(f) : null;
+    if(cpm===null) return null;
+    return (Number(p.metersPerPiece)||0) * cpm;
+  }
+  // labor is treated as 0 when unset (supplementary cost, not a hard blocker like material/price)
+  function productLaborCostPerPiece(p){
+    const v = p && p.laborCostPerPiece;
+    return (v===null || v===undefined || v==='') ? 0 : Number(v);
+  }
+  // Aggregates profit across every sold order-item. Returns:
+  //  revenue/materialCost/laborCost/grossProfit — totals from items with complete data
+  //  overhead/netProfit — grossProfit minus the flat monthly overhead
+  //  knownSold/unknownSold — units sold with vs. without enough data to compute profit
+  function computeProfitSummary(){
+    let revenue=0, materialCost=0, laborCost=0, knownSold=0, unknownSold=0;
+    state.orders.forEach(o=>o.items.forEach(it=>{
+      const sold = Number(it.sold)||0;
+      if(sold<=0) return;
+      const p = productById(it.productId);
+      const price = p && p.price!=null && p.price!=='' ? Number(p.price) : null;
+      const matCost = p ? productMaterialCostPerPiece(p) : null;
+      if(!p || price===null || matCost===null){ unknownSold += sold; return; }
+      knownSold += sold;
+      revenue += price * sold;
+      materialCost += matCost * sold;
+      laborCost += productLaborCostPerPiece(p) * sold;
+    }));
+    const grossProfit = revenue - materialCost - laborCost;
+    const overhead = Number(state.overheadMonthly)||0;
+    const netProfit = grossProfit - overhead;
+    return { revenue, materialCost, laborCost, grossProfit, overhead, netProfit, knownSold, unknownSold };
+  }
+
   function totalRemainingMeters(){
     return state.fabrics.reduce((s,f)=> s + fabricRemaining(f), 0);
   }
@@ -321,16 +369,18 @@
     if(rows.length===0){ showToast("أدخل لون واحد على الأقل"); return; }
     const code = vals.code.trim();
     let addedCount = 0, mergedCount = 0;
+    const costPerMeter = vals.costPerMeter ? Number(vals.costPerMeter) : null;
     rows.forEach(row=>{
       const rowImage = row.image || vals.image || '';
       const existing = state.fabrics.find(f => f.code.trim()===code && f.color.trim().toLowerCase()===row.color.toLowerCase());
       if(existing){
         existing.total = (Number(existing.total)||0) + row.qty;
         if(rowImage) existing.image = rowImage;
+        if(costPerMeter!==null) existing.costPerMeter = costPerMeter;
         existing.updatedAt = Date.now();
         mergedCount++;
       } else {
-        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: rowImage || null, updatedAt: Date.now() });
+        state.fabrics.push({ id: uid(), code, color: row.color, total: row.qty, used: 0, image: rowImage || null, costPerMeter, updatedAt: Date.now() });
         addedCount++;
       }
     });
@@ -346,6 +396,7 @@
     if(!f) return;
     f.code = vals.code.trim(); f.color = vals.color.trim(); f.total = Number(vals.qty)||0;
     f.image = vals.image || null;
+    f.costPerMeter = vals.costPerMeter ? Number(vals.costPerMeter) : null;
     f.updatedAt = Date.now();
     save(); showToast("تم تعديل القماش"); render();
   }
@@ -368,6 +419,7 @@
       readyQty: hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0,
       metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
       price: vals.price ? Number(vals.price) : null,
+      laborCostPerPiece: vals.laborCostPerPiece ? Number(vals.laborCostPerPiece) : null,
       image: vals.image || null,
       updatedAt: Date.now()
     };
@@ -390,6 +442,7 @@
     p.fabricId = usesFabric ? (vals.fabricId || null) : null;
     p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
     p.price = vals.price ? Number(vals.price) : null;
+    p.laborCostPerPiece = vals.laborCostPerPiece ? Number(vals.laborCostPerPiece) : null;
     p.image = vals.image || null;
     p.updatedAt = Date.now();
     save(); showToast("تم تعديل المنتج"); render();
@@ -612,6 +665,20 @@
     save(); render();
   }
 
+  function modalSetOverhead(){
+    openModal({
+      title: "المصاريف العامة الشهرية",
+      submitLabel: "حفظ",
+      fields: [
+        {key:'overheadMonthly', label:'الإيجار + المرتبات الثابتة + الكهرباء... إلخ (جنيه/شهر)', type:'number', step:'0.01', value: state.overheadMonthly||'', required:false}
+      ],
+      onSubmit: vals => {
+        state.overheadMonthly = Number(vals.overheadMonthly)||0;
+        save(); showToast("اتحفظت المصاريف العامة"); render();
+      }
+    });
+  }
+
   // ---------- modal helpers ----------
   function openModal(cfg){ modal = cfg; render(); setTimeout(()=>{ const f=document.querySelector('.modal input,.modal select'); if(f) f.focus(); }, 30); }
   function closeModal(){ modal = null; render(); }
@@ -658,6 +725,7 @@
       fields: [
         {key:'code', label:'كود القماش', type:'text', required:true},
         {type:'colorRows', key:'colors', label:'الألوان والكميات'},
+        {key:'costPerMeter', label:'تكلفة المتر (اختياري، جنيه)', type:'number', step:'0.01', required:false},
         {key:'image', label:'صورة افتراضية (تُستخدم فقط للألوان اللي مالهاش صورة خاصة فوق)', type:'image', value:''}
       ],
       onSubmit: vals => addFabric(vals)
@@ -671,6 +739,7 @@
         {key:'code', label:'كود القماش', type:'text', value:f.code, required:true},
         {key:'color', label:'اللون', type:'text', value:f.color, required:true},
         {key:'qty', label:'إجمالي الكمية (متر)', type:'number', value:f.total, required:true},
+        {key:'costPerMeter', label:'تكلفة المتر (اختياري، جنيه)', type:'number', step:'0.01', value:f.costPerMeter||'', required:false},
         {key:'image', label:'صورة القماش', type:'image', value:f.image||''}
       ],
       onSubmit: vals => editFabric(f.id, vals)
@@ -694,6 +763,7 @@
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
+        {key:'laborCostPerPiece', label:'تكلفة العمالة لكل قطعة (اختياري، جنيه)', type:'number', step:'0.01', required:false},
         {key:'image', label:'صورة المنتج', type:'image', value:''}
       ],
       onSubmit: vals => addProduct(vals)
@@ -717,6 +787,7 @@
           {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
+        {key:'laborCostPerPiece', label:'تكلفة العمالة لكل قطعة (اختياري، جنيه)', type:'number', step:'0.01', value:p.laborCostPerPiece||'', required:false},
         {key:'image', label:'صورة المنتج', type:'image', value:p.image||''}
       ],
       onSubmit: vals => editProduct(p.id, vals)
@@ -1184,6 +1255,30 @@
         <div class="muted" style="font-size:13px;">بناءً على أسعار المنتجات المسجّلة</div>
       </div>
     </div>` : ''}
+
+    ${(() => {
+      const ps = computeProfitSummary();
+      if(ps.knownSold===0 && ps.overhead===0) return '';
+      return `<div class="ticket">
+      <div class="ticket-stub">
+        <h2 class="ticket-title">💰 الأرباح</h2>
+        <button class="btn ghost sm" data-action="openOverheadSettings">المصاريف العامة</button>
+      </div>
+      <div class="ticket-perf"></div>
+      <div class="ticket-body">
+        <div class="table-scroll"><table><tbody>
+          <tr><td>المبيعات</td><td class="num mono">${fmt(ps.revenue)}</td></tr>
+          <tr><td>تكلفة الخامة (القماش)</td><td class="num mono">- ${fmt(ps.materialCost)}</td></tr>
+          <tr><td>تكلفة العمالة</td><td class="num mono">- ${fmt(ps.laborCost)}</td></tr>
+          <tr><td><b>الربح قبل المصاريف العامة</b></td><td class="num mono"><b>${fmt(ps.grossProfit)}</b></td></tr>
+          <tr><td>المصاريف العامة الشهرية</td><td class="num mono">- ${fmt(ps.overhead)}</td></tr>
+          <tr><td><b>صافي الربح</b></td><td class="num mono" style="color:${ps.netProfit>=0?'#2F6F6B':'#C1442E'}"><b>${fmt(ps.netProfit)}</b></td></tr>
+        </tbody></table></div>
+        ${ps.unknownSold>0 ? `<div class="muted" style="font-size:12px;margin-top:8px;">⚠️ ${fmt(ps.unknownSold)} قطعة مباعة مستبعدة من الحساب لعدم وجود سعر بيع أو تكلفة قماش مسجّلة لمنتجها</div>` : ''}
+        <div class="muted" style="font-size:12px;margin-top:4px;">المصاريف العامة رقم تقريبي بيتخصم مرة واحدة، مش بالمعاملة — عدّله من الزرار فوق.</div>
+      </div>
+    </div>`;
+    })()}
     `;
   }
 
@@ -2185,6 +2280,7 @@
         else if(action==='addOrderForCustomer'){ const customerName = el.getAttribute('data-name'); historyModal = null; historyContextOrderId = null; modalAddOrder(customerName); }
         else if(action==='confirmYes'){ const fn=confirmTarget.onConfirm; confirmTarget=null; fn(); }
         else if(action==='confirmNo'){ confirmTarget=null; render(); }
+        else if(action==='openOverheadSettings'){ modalSetOverhead(); }
         else if(action==='openChangePassword'){ changePasswordModal=true; changePasswordError=''; render(); }
         else if(action==='closeChangePassword'){ changePasswordModal=false; changePasswordError=''; render(); }
         else if(action==='lockApp'){
