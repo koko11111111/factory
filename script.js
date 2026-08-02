@@ -562,18 +562,57 @@
     purgeOldTrash();
     save(); showToast("تم حذف الطلبية (تقدر تسترجعها من 🗑️ خلال ٣٠ يوم)"); render();
   }
+  // Draws up to `qty` units of a product's *total* available ready stock —
+  // the manual readyQty pool first, then any unsold surplus sitting on
+  // other order items for this product (produced but not yet sold there) —
+  // oldest order first. Physically moves the stock: reduces the manual pool
+  // and/or the source items' `produced`, so it can't also be pulled again
+  // later from effectiveReadyQty(). Returns how much was actually pulled
+  // (may be less than qty if not enough exists).
+  function pullReadyStock(productId, qty){
+    const p = productById(productId);
+    if(!p || qty<=0) return 0;
+    let remaining = qty, pulled = 0;
+
+    const fromManual = Math.min(remaining, Number(p.readyQty)||0);
+    if(fromManual > 0){
+      p.readyQty = (Number(p.readyQty)||0) - fromManual;
+      remaining -= fromManual; pulled += fromManual;
+    }
+
+    if(remaining > 0){
+      const sources = [];
+      state.orders.forEach(o=>{
+        o.items.forEach(it=>{
+          if(it.productId === productId) sources.push({ o, it });
+        });
+      });
+      sources.sort((a,b)=> (a.o.date||'').localeCompare(b.o.date||''));
+      for(const {it} of sources){
+        if(remaining <= 0) break;
+        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+        const surplus = Math.max(0, newlyProduced - (Number(it.sold)||0));
+        const take = Math.min(remaining, surplus);
+        if(take > 0){
+          it.produced = (Number(it.produced)||0) - take;
+          remaining -= take; pulled += take;
+        }
+      }
+    }
+    return pulled;
+  }
+
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
     const ordered = Number(vals.ordered)||0;
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
-    if(p && ordered>0 && (Number(p.readyQty)||0) > 0){
-      fromReady = Math.min(ordered, Number(p.readyQty)||0);
+    if(p && ordered>0 && effectiveReadyQty(p) > 0){
+      fromReady = pullReadyStock(vals.productId, ordered);
       produced = fromReady;
-      p.readyQty = (Number(p.readyQty)||0) - fromReady;
     }
-    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady, excessToReady: 0 });
+    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady });
     if(fromReady>0){
       showToast(fromReady>=ordered ? `اتغطت الطلبية كلها من المخزون الجاهز (${fmt(fromReady)} قطعة)، مفيش داعي تنتج أكتر` : `اتغطى ${fmt(fromReady)} من ${fmt(ordered)} من المخزون الجاهز، والباقي محتاج إنتاج`);
     }
@@ -590,9 +629,6 @@
         // give back any ready stock this item auto-consumed when created
         const fromReady = Number(it.producedFromReady)||0;
         if(fromReady) p.readyQty = (Number(p.readyQty)||0) + fromReady;
-        // remove any surplus this item had credited into ready stock
-        const excess = Number(it.excessToReady)||0;
-        if(excess) p.readyQty = Math.max(0, (Number(p.readyQty)||0) - excess);
         // release the fabric consumed producing this item (fromReady pieces
         // didn't consume fabric just now — they were made earlier — so only
         // the portion produced beyond that counts)
@@ -638,27 +674,6 @@
       it.sold = num;
     } else if(field==="ordered"){
       it.ordered = num;
-    }
-
-    // Producing more than this order actually needs (or lowering "ordered"
-    // below what's already produced) leaves a surplus — credit that surplus
-    // back to the product's ready stock (readyQty) so it's available to
-    // auto-fill future orders instead of just vanishing. it.excessToReady
-    // tracks how much surplus we've already credited, so nudging the
-    // numbers up/down repeatedly adjusts readyQty by the difference each
-    // time instead of double-counting.
-    if(field==="produced" || field==="ordered"){
-      const p = productById(it.productId);
-      if(p){
-        const newExcess = Math.max(0, (Number(it.produced)||0) - (Number(it.ordered)||0));
-        const prevExcess = Number(it.excessToReady)||0;
-        const excessDelta = newExcess - prevExcess;
-        if(excessDelta !== 0){
-          p.readyQty = Math.max(0, (Number(p.readyQty)||0) + excessDelta);
-          if(excessDelta > 0) showToast(`الفايض (${fmt(excessDelta)} قطعة) اتضاف للمخزون الجاهز`);
-        }
-        it.excessToReady = newExcess;
-      }
     }
 
     save(); render();
