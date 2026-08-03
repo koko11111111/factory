@@ -275,25 +275,13 @@
   // ready, same as manually-entered readyQty. `producedFromReady` (set once
   // when the order item is created) is excluded so ready stock that was
   // already drawn down to cover that order isn't counted twice.
-  // How many unsold, newly-made units of this order item are sitting as
-  // physical surplus. `producedFromReady` pieces were already pulled out of
-  // stock (and removed from it) back when the item was created, so selling
-  // up to that many pieces doesn't touch the newly-made pool at all — only
-  // sales BEYOND that amount eat into it. (Previously this subtracted the
-  // full `sold` count, which wrongly zeroed out real surplus any time an
-  // order had been auto-filled from ready stock at creation.)
-  function orderItemSurplus(it){
-    const fromReady = Number(it.producedFromReady)||0;
-    const newlyProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
-    const soldBeyondReady = Math.max(0, (Number(it.sold)||0) - fromReady);
-    return Math.max(0, newlyProduced - soldBeyondReady);
-  }
   function productSurplusReady(productId){
     let surplus = 0;
     state.orders.forEach(o=>{
       o.items.forEach(it=>{
         if(it.productId !== productId) return;
-        surplus += orderItemSurplus(it);
+        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+        surplus += Math.max(0, newlyProduced - (Number(it.sold)||0));
       });
     });
     return surplus;
@@ -574,54 +562,16 @@
     purgeOldTrash();
     save(); showToast("تم حذف الطلبية (تقدر تسترجعها من 🗑️ خلال ٣٠ يوم)"); render();
   }
-  // Draws up to `qty` units of a product's *total* available ready stock —
-  // the manual readyQty pool first, then any unsold surplus sitting on
-  // other order items for this product (produced but not yet sold there) —
-  // oldest order first. Physically moves the stock: reduces the manual pool
-  // and/or the source items' `produced`, so it can't also be pulled again
-  // later from effectiveReadyQty(). Returns how much was actually pulled
-  // (may be less than qty if not enough exists).
-  function pullReadyStock(productId, qty){
-    const p = productById(productId);
-    if(!p || qty<=0) return 0;
-    let remaining = qty, pulled = 0;
-
-    const fromManual = Math.min(remaining, Number(p.readyQty)||0);
-    if(fromManual > 0){
-      p.readyQty = (Number(p.readyQty)||0) - fromManual;
-      remaining -= fromManual; pulled += fromManual;
-    }
-
-    if(remaining > 0){
-      const sources = [];
-      state.orders.forEach(o=>{
-        o.items.forEach(it=>{
-          if(it.productId === productId) sources.push({ o, it });
-        });
-      });
-      sources.sort((a,b)=> (a.o.date||'').localeCompare(b.o.date||''));
-      for(const {it} of sources){
-        if(remaining <= 0) break;
-        const surplus = orderItemSurplus(it);
-        const take = Math.min(remaining, surplus);
-        if(take > 0){
-          it.produced = (Number(it.produced)||0) - take;
-          remaining -= take; pulled += take;
-        }
-      }
-    }
-    return pulled;
-  }
-
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
     const ordered = Number(vals.ordered)||0;
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
-    if(p && ordered>0 && effectiveReadyQty(p) > 0){
-      fromReady = pullReadyStock(vals.productId, ordered);
+    if(p && ordered>0 && (Number(p.readyQty)||0) > 0){
+      fromReady = Math.min(ordered, Number(p.readyQty)||0);
       produced = fromReady;
+      p.readyQty = (Number(p.readyQty)||0) - fromReady;
     }
     o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady });
     if(fromReady>0){
@@ -633,33 +583,12 @@
     const o = orderById(orderId);
     if(!o) return;
     if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
-    const it = o.items.find(i=>i.id===itemId);
-    if(it){
-      const p = productById(it.productId);
-      if(p){
-        // give back any ready stock this item auto-consumed when created
-        const fromReady = Number(it.producedFromReady)||0;
-        if(fromReady) p.readyQty = (Number(p.readyQty)||0) + fromReady;
-        // release the fabric consumed producing this item (fromReady pieces
-        // didn't consume fabric just now — they were made earlier — so only
-        // the portion produced beyond that counts)
-        if(p.fabricId){
-          const f = fabricById(p.fabricId);
-          if(f){
-            const extraProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
-            const metersUsed = extraProduced * (Number(p.metersPerPiece)||0);
-            f.used = Math.max(0, (Number(f.used)||0) - metersUsed);
-          }
-        }
-      }
-    }
     o.items = o.items.filter(it=>it.id!==itemId);
     save(); render();
   }
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
-    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -686,7 +615,6 @@
     } else if(field==="ordered"){
       it.ordered = num;
     }
-
     save(); render();
   }
 
@@ -737,7 +665,7 @@
     const rows = [['الرقم','الاسم','القصة','الجاهز عندك','القماش','متر/قطعة','السعر']];
     state.products.forEach(p=>{
       const f = fabricById(p.fabricId);
-      rows.push([p.code||'', p.name, p.cut, fmt(effectiveReadyQty(p)), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
+      rows.push([p.code||'', p.name, p.cut, fmt(p.readyQty), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
     });
     downloadCsv('products.csv', rows);
   }
@@ -1734,10 +1662,9 @@
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
       ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?'🔽 إخفاء المكتملة':'✅ إظهار المكتملة'} (${completedCount})</button>` : ''}
-      ${state.orders.length>0 ? `<button class="btn ghost" data-action="openCustomerLookup" title="دور على طلبيات وسجل عميل معين">🕘 سجل عميل</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
-    ${completedCount>0 && !showCompletedOrders ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة متخبية دلوقتي — دوس "إظهار المكتملة" فوق عشان تشوفها، أو "🕘 سجل عميل" عشان تدورلها باسم العميل.</div>` : ''}
+    ${completedCount>0 && !showCompletedOrders ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة متخبية دلوقتي — دوس "إظهار المكتملة" فوق عشان تشوفها.</div>` : ''}
     ${state.orders.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('📦','لا توجد طلبات بعد. أنشئ أول طلبية من الزر أعلاه.')}</div></div>` :
       list.length===0 ? `<div class="ticket"><div class="ticket-body">${emptyHtml('🔍','لا توجد طلبات مطابقة')}</div></div>` :
       list.slice().reverse().map(o=>{
@@ -1791,25 +1718,6 @@
     `;
   }
 
-  function modalCustomerLookup(){
-    const names = Array.from(new Set(state.orders.map(o => (o.name||'').trim()).filter(Boolean)));
-    const options = names.sort((a,b)=>a.localeCompare(b,'ar')).map(n => ({ id:n, label:n }));
-    openModal({
-      title: "سجل عميل",
-      submitLabel: "عرض السجل",
-      fields: [
-        {key:'customerName', label:'اسم العميل', type:'searchselect', options, required:true, emptyMsg:'لا توجد طلبات بعد'}
-      ],
-      onSubmit: vals => {
-        if(!vals.customerName){ showToast("اختر عميل"); return; }
-        modal = null;
-        historyModal = vals.customerName;
-        historyContextOrderId = null;
-        render();
-      }
-    });
-  }
-
   function orderDetailHtml(){
     const o = orderById(activeOrderId);
     if(!o){ view='orders'; return ordersHtml(); }
@@ -1829,7 +1737,6 @@
           </div>
         </div>
         <div class="btn-group-wrap">
-          <button class="btn ghost sm" data-action="openCustomerHistory" data-id="${o.id}" title="سجل هذا العميل مع كل طلباته">🕘 سجل العميل</button>
           <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
         </div>
       </div>
@@ -1865,9 +1772,9 @@
             ${thumbHtml(p&&p.image, p&&p.name)}
             <b>${label}</b>
           </div>
-          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
-          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
-          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
           <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button>`}</div>
         </div>`;
       }).join('')}
@@ -2081,20 +1988,14 @@
         ${orders.length===0 ? emptyHtml('🕘','لا يوجد سجل سابق لهذا العميل') : orders.map(o=>{
           const pr = orderProgress(o);
           const isCurrent = o.id === historyContextOrderId;
-          const oRev = orderRevenue(o), oPaid = orderPaid(o), oBal = oRev - oPaid;
           return `<div class="ticket mini" style="margin:0;${isCurrent?'border-color:var(--gold, #e9be58);':''}">
             <div class="ticket-stub">
               <div>
                 <h2 class="ticket-title" style="font-size:14px;">${escapeHtml(o.date||'بدون تاريخ')} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span>${isCurrent?' <span class="muted" style="font-size:11px;">(الطلبية الحالية)</span>':''}</h2>
                 <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span></div>
               </div>
-              <button class="btn ghost sm icon-only" data-action="editOrderFromHistory" data-id="${o.id}" title="تعديل بيانات الطلبية (منها المبلغ المدفوع)">✏️</button>
             </div>
             <div class="ticket-body" style="padding-top:8px;">
-            ${(oRev>0 || oPaid>0) ? `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0 8px;">
-              <span class="muted">المدفوع من الطلبية دي</span>
-              <span class="mono">${fmt(oPaid)}${oBal>0?` <span style="color:#C1442E;">(متبقي ${fmt(oBal)})</span>`:''}</span>
-            </div>` : ''}
             ${o.items.length===0 ? '<div class="muted" style="font-size:13px;">لا توجد أصناف</div>' : o.items.map(it=>{
               const p = productById(it.productId);
               return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.06);">
@@ -2629,15 +2530,8 @@
         else if(action==='addOrderItem') modalAddOrderItem(id);
         else if(action==='deleteOrderItem') deleteOrderItem(el.getAttribute('data-order'), el.getAttribute('data-item'));
         else if(action==='closeModal') closeModal();
-        else if(action==='openCustomerHistory'){ const o = orderById(id); if(o){ historyModal = o.name; historyContextOrderId = id; } render(); }
         else if(action==='openCustomerHistoryByName'){ historyModal = el.getAttribute('data-name'); historyContextOrderId = null; render(); }
-        else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
-        else if(action==='editOrderFromHistory'){
-          const o = orderById(id);
-          historyModal = null; historyContextOrderId = null;
-          if(o) modalEditOrder(o); else render();
-        }
         else if(action==='openTrash'){ trashModalOpen = true; render(); }
         else if(action==='closeTrash'){ trashModalOpen = false; render(); }
         else if(action==='restoreTrashItem'){
