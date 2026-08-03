@@ -275,13 +275,25 @@
   // ready, same as manually-entered readyQty. `producedFromReady` (set once
   // when the order item is created) is excluded so ready stock that was
   // already drawn down to cover that order isn't counted twice.
+  // How many unsold, newly-made units of this order item are sitting as
+  // physical surplus. `producedFromReady` pieces were already pulled out of
+  // stock (and removed from it) back when the item was created, so selling
+  // up to that many pieces doesn't touch the newly-made pool at all — only
+  // sales BEYOND that amount eat into it. (Previously this subtracted the
+  // full `sold` count, which wrongly zeroed out real surplus any time an
+  // order had been auto-filled from ready stock at creation.)
+  function orderItemSurplus(it){
+    const fromReady = Number(it.producedFromReady)||0;
+    const newlyProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
+    const soldBeyondReady = Math.max(0, (Number(it.sold)||0) - fromReady);
+    return Math.max(0, newlyProduced - soldBeyondReady);
+  }
   function productSurplusReady(productId){
     let surplus = 0;
     state.orders.forEach(o=>{
       o.items.forEach(it=>{
         if(it.productId !== productId) return;
-        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
-        surplus += Math.max(0, newlyProduced - (Number(it.sold)||0));
+        surplus += orderItemSurplus(it);
       });
     });
     return surplus;
@@ -292,49 +304,6 @@
     return (Number(p.readyQty)||0) + productSurplusReady(p.id);
   }
   function orderById(id){ return state.orders.find(o=>o.id===id); }
-
-  // ---------- fabric / ready-stock reconciliation on delete + restore ----------
-  // An order item can consume real inventory two ways: (1) drawing down a
-  // product's readyQty when it's first created (see addOrderItem's `fromReady`),
-  // and (2) consuming fabric meters as "produced" is increased past that point
-  // (see updateOrderItemQty). Deleting the item/order later must give both back,
-  // or that stock is permanently lost from the books. Restoring from trash must
-  // re-consume the same amounts (best-effort — if the fabric/ready stock has
-  // since been used elsewhere, it simply can't go negative).
-  function newlyProducedMeters(it, p){
-    const fromReady = Number(it.producedFromReady)||0;
-    const newlyProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
-    return newlyProduced * (Number(p.metersPerPiece)||0);
-  }
-  function refundOrderItemStock(it){
-    const p = productById(it.productId);
-    if(!p) return;
-    const fromReady = Number(it.producedFromReady)||0;
-    if(fromReady>0) p.readyQty = (Number(p.readyQty)||0) + fromReady;
-    if(p.fabricId){
-      const f = fabricById(p.fabricId);
-      if(f){
-        const meters = newlyProducedMeters(it, p);
-        if(meters>0) f.used = Math.max(0, (Number(f.used)||0) - meters);
-      }
-    }
-  }
-  function reapplyOrderItemStock(it){
-    const p = productById(it.productId);
-    if(!p) return;
-    const fromReady = Number(it.producedFromReady)||0;
-    if(fromReady>0){
-      const avail = Number(p.readyQty)||0;
-      p.readyQty = Math.max(0, avail - fromReady); // clamps at 0 if less is left than was originally drawn
-    }
-    if(p.fabricId){
-      const f = fabricById(p.fabricId);
-      if(f){
-        const meters = newlyProducedMeters(it, p);
-        if(meters>0) f.used = (Number(f.used)||0) + meters;
-      }
-    }
-  }
 
   // ---------- profit (revenue − material − labor − overhead) ----------
   // Every layer here is optional and degrades gracefully: an item with no
@@ -481,7 +450,7 @@
     if(rows.length===0){ showToast("أدخل لون واحد على الأقل"); return; }
     const code = vals.code.trim();
     let addedCount = 0, mergedCount = 0;
-    const costPerMeter = vals.costPerMeter ? Math.max(0, Number(vals.costPerMeter)) : null;
+    const costPerMeter = vals.costPerMeter ? Number(vals.costPerMeter) : null;
     rows.forEach(row=>{
       const rowImage = row.image || vals.image || '';
       const existing = state.fabrics.find(f => f.code.trim()===code && f.color.trim().toLowerCase()===row.color.toLowerCase());
@@ -506,9 +475,9 @@
   function editFabric(id, vals){
     const f = fabricById(id);
     if(!f) return;
-    f.code = vals.code.trim(); f.color = vals.color.trim(); f.total = Math.max(0, Number(vals.qty)||0);
+    f.code = vals.code.trim(); f.color = vals.color.trim(); f.total = Number(vals.qty)||0;
     f.image = vals.image || null;
-    f.costPerMeter = vals.costPerMeter ? Math.max(0, Number(vals.costPerMeter)) : null;
+    f.costPerMeter = vals.costPerMeter ? Number(vals.costPerMeter) : null;
     f.updatedAt = Date.now();
     save(); showToast("تم تعديل القماش"); render();
   }
@@ -532,9 +501,9 @@
       name: vals.name.trim(),
       cut: vals.cut.trim(),
       readyQty: hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0,
-      metersPerPiece: usesFabric ? Math.max(0, Number(vals.meters)||0) : 0,
-      price: vals.price ? Math.max(0, Number(vals.price)) : null,
-      laborCostPerPiece: vals.laborCostPerPiece ? Math.max(0, Number(vals.laborCostPerPiece)) : null,
+      metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
+      price: vals.price ? Number(vals.price) : null,
+      laborCostPerPiece: vals.laborCostPerPiece ? Number(vals.laborCostPerPiece) : null,
       image: vals.image || null,
       updatedAt: Date.now()
     };
@@ -555,9 +524,9 @@
     p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim();
     p.readyQty = hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0;
     p.fabricId = usesFabric ? (vals.fabricId || null) : null;
-    p.metersPerPiece = usesFabric ? Math.max(0, Number(vals.meters)||0) : 0;
-    p.price = vals.price ? Math.max(0, Number(vals.price)) : null;
-    p.laborCostPerPiece = vals.laborCostPerPiece ? Math.max(0, Number(vals.laborCostPerPiece)) : null;
+    p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
+    p.price = vals.price ? Number(vals.price) : null;
+    p.laborCostPerPiece = vals.laborCostPerPiece ? Number(vals.laborCostPerPiece) : null;
     p.image = vals.image || null;
     p.updatedAt = Date.now();
     save(); showToast("تم تعديل المنتج"); render();
@@ -599,26 +568,60 @@
   }
   function deleteOrder(id){
     const o = orderById(id);
-    if(o){
-      o.items.forEach(refundOrderItemStock);
-      state.trash.orders.push({ ...o, deletedAt: Date.now() });
-    }
+    if(o) state.trash.orders.push({ ...o, deletedAt: Date.now() });
     state.orders = state.orders.filter(o=>o.id!==id);
     if(activeOrderId===id){ activeOrderId=null; view="orders"; }
     purgeOldTrash();
     save(); showToast("تم حذف الطلبية (تقدر تسترجعها من 🗑️ خلال ٣٠ يوم)"); render();
   }
+  // Draws up to `qty` units of a product's *total* available ready stock —
+  // the manual readyQty pool first, then any unsold surplus sitting on
+  // other order items for this product (produced but not yet sold there) —
+  // oldest order first. Physically moves the stock: reduces the manual pool
+  // and/or the source items' `produced`, so it can't also be pulled again
+  // later from effectiveReadyQty(). Returns how much was actually pulled
+  // (may be less than qty if not enough exists).
+  function pullReadyStock(productId, qty){
+    const p = productById(productId);
+    if(!p || qty<=0) return 0;
+    let remaining = qty, pulled = 0;
+
+    const fromManual = Math.min(remaining, Number(p.readyQty)||0);
+    if(fromManual > 0){
+      p.readyQty = (Number(p.readyQty)||0) - fromManual;
+      remaining -= fromManual; pulled += fromManual;
+    }
+
+    if(remaining > 0){
+      const sources = [];
+      state.orders.forEach(o=>{
+        o.items.forEach(it=>{
+          if(it.productId === productId) sources.push({ o, it });
+        });
+      });
+      sources.sort((a,b)=> (a.o.date||'').localeCompare(b.o.date||''));
+      for(const {it} of sources){
+        if(remaining <= 0) break;
+        const surplus = orderItemSurplus(it);
+        const take = Math.min(remaining, surplus);
+        if(take > 0){
+          it.produced = (Number(it.produced)||0) - take;
+          remaining -= take; pulled += take;
+        }
+      }
+    }
+    return pulled;
+  }
+
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
     const ordered = Number(vals.ordered)||0;
-    if(ordered<=0){ showToast("أدخل كمية مطلوبة أكبر من صفر"); return; }
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
-    if(p && ordered>0 && (Number(p.readyQty)||0) > 0){
-      fromReady = Math.min(ordered, Number(p.readyQty)||0);
+    if(p && ordered>0 && effectiveReadyQty(p) > 0){
+      fromReady = pullReadyStock(vals.productId, ordered);
       produced = fromReady;
-      p.readyQty = (Number(p.readyQty)||0) - fromReady;
     }
     o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady });
     if(fromReady>0){
@@ -631,13 +634,32 @@
     if(!o) return;
     if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const it = o.items.find(i=>i.id===itemId);
-    if(it) refundOrderItemStock(it);
+    if(it){
+      const p = productById(it.productId);
+      if(p){
+        // give back any ready stock this item auto-consumed when created
+        const fromReady = Number(it.producedFromReady)||0;
+        if(fromReady) p.readyQty = (Number(p.readyQty)||0) + fromReady;
+        // release the fabric consumed producing this item (fromReady pieces
+        // didn't consume fabric just now — they were made earlier — so only
+        // the portion produced beyond that counts)
+        if(p.fabricId){
+          const f = fabricById(p.fabricId);
+          if(f){
+            const extraProduced = Math.max(0, (Number(it.produced)||0) - fromReady);
+            const metersUsed = extraProduced * (Number(p.metersPerPiece)||0);
+            f.used = Math.max(0, (Number(f.used)||0) - metersUsed);
+          }
+        }
+      }
+    }
     o.items = o.items.filter(it=>it.id!==itemId);
     save(); render();
   }
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -660,16 +682,11 @@
       }
       it.produced = num;
     } else if(field==="sold"){
-      const cap = Number(it.produced)||0;
-      if(num > cap){
-        showToast("مينفعش تبيع أكتر من اللي اتنتج (" + fmt(cap) + " قطعة)");
-        it.sold = cap;
-      } else {
-        it.sold = num;
-      }
+      it.sold = num;
     } else if(field==="ordered"){
       it.ordered = num;
     }
+
     save(); render();
   }
 
@@ -720,7 +737,7 @@
     const rows = [['الرقم','الاسم','القصة','الجاهز عندك','القماش','متر/قطعة','السعر']];
     state.products.forEach(p=>{
       const f = fabricById(p.fabricId);
-      rows.push([p.code||'', p.name, p.cut, fmt(p.readyQty), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
+      rows.push([p.code||'', p.name, p.cut, fmt(effectiveReadyQty(p)), f ? (f.code+' - '+f.color) : '', p.fabricId ? fmt(p.metersPerPiece) : '', p.price ? fmt(p.price) : '']);
     });
     downloadCsv('products.csv', rows);
   }
@@ -790,7 +807,7 @@
   function bulkDeleteOrders(){
     const ids = Array.from(selection.orders);
     if(ids.length===0) return;
-    ids.forEach(id=>{ const o = orderById(id); if(o){ o.items.forEach(refundOrderItemStock); state.trash.orders.push({ ...o, deletedAt: Date.now() }); } });
+    ids.forEach(id=>{ const o = orderById(id); if(o) state.trash.orders.push({ ...o, deletedAt: Date.now() }); });
     state.orders = state.orders.filter(o => !ids.includes(o.id));
     if(ids.includes(activeOrderId)){ activeOrderId=null; view='orders'; }
     selection.orders.clear();
@@ -813,7 +830,7 @@
         {key:'overheadMonthly', label:'الإيجار + المرتبات الثابتة + الكهرباء... إلخ (جنيه/شهر)', type:'number', step:'0.01', value: state.overheadMonthly||'', required:false}
       ],
       onSubmit: vals => {
-        state.overheadMonthly = Math.max(0, Number(vals.overheadMonthly)||0);
+        state.overheadMonthly = Number(vals.overheadMonthly)||0;
         save(); showToast("اتحفظت المصاريف العامة"); render();
       }
     });
@@ -1848,9 +1865,9 @@
             ${thumbHtml(p&&p.image, p&&p.name)}
             <b>${label}</b>
           </div>
-          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
           <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button>`}</div>
         </div>`;
       }).join('')}
@@ -1971,7 +1988,7 @@
       if(!m) return;
       const color = (vals[k]||'').trim();
       if(!color) return;
-      const qty = Math.max(0, Number(vals['mc_qty_'+m[1]]) || 0);
+      const qty = Number(vals['mc_qty_'+m[1]]) || 0;
       const image = (vals['mc_image_'+m[1]]||'').trim();
       rows.push({ color, qty, image });
     });
@@ -2064,14 +2081,20 @@
         ${orders.length===0 ? emptyHtml('🕘','لا يوجد سجل سابق لهذا العميل') : orders.map(o=>{
           const pr = orderProgress(o);
           const isCurrent = o.id === historyContextOrderId;
+          const oRev = orderRevenue(o), oPaid = orderPaid(o), oBal = oRev - oPaid;
           return `<div class="ticket mini" style="margin:0;${isCurrent?'border-color:var(--gold, #e9be58);':''}">
             <div class="ticket-stub">
               <div>
                 <h2 class="ticket-title" style="font-size:14px;">${escapeHtml(o.date||'بدون تاريخ')} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span>${isCurrent?' <span class="muted" style="font-size:11px;">(الطلبية الحالية)</span>':''}</h2>
                 <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span></div>
               </div>
+              <button class="btn ghost sm icon-only" data-action="editOrderFromHistory" data-id="${o.id}" title="تعديل بيانات الطلبية (منها المبلغ المدفوع)">✏️</button>
             </div>
             <div class="ticket-body" style="padding-top:8px;">
+            ${(oRev>0 || oPaid>0) ? `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0 8px;">
+              <span class="muted">المدفوع من الطلبية دي</span>
+              <span class="mono">${fmt(oPaid)}${oBal>0?` <span style="color:#C1442E;">(متبقي ${fmt(oBal)})</span>`:''}</span>
+            </div>` : ''}
             ${o.items.length===0 ? '<div class="muted" style="font-size:13px;">لا توجد أصناف</div>' : o.items.map(it=>{
               const p = productById(it.productId);
               return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.06);">
@@ -2112,7 +2135,6 @@
     delete item.deletedAt;
     state.trash.orders.splice(idx,1);
     state.orders.push(item);
-    item.items.forEach(reapplyOrderItemStock);
     save(); showToast("اترجعت الطلبية"); render();
   }
   function purgeTrashItem(kind, id){
@@ -2611,6 +2633,11 @@
         else if(action==='openCustomerHistoryByName'){ historyModal = el.getAttribute('data-name'); historyContextOrderId = null; render(); }
         else if(action==='openCustomerLookup'){ modalCustomerLookup(); }
         else if(action==='closeHistoryModal'){ historyModal = null; render(); }
+        else if(action==='editOrderFromHistory'){
+          const o = orderById(id);
+          historyModal = null; historyContextOrderId = null;
+          if(o) modalEditOrder(o); else render();
+        }
         else if(action==='openTrash'){ trashModalOpen = true; render(); }
         else if(action==='closeTrash'){ trashModalOpen = false; render(); }
         else if(action==='restoreTrashItem'){
