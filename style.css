@@ -1,30 +1,30 @@
   :root{
-    /* ---------- brand (deep navy + brass) ---------- */
-    --mat: #0B1C33;
-    --mat-2: #14314F;
+    /* ---------- brand (charcoal + brass) ---------- */
+    --mat: #1B1712;
+    --mat-2: #2B241C;
     --mat-line: rgba(255,255,255,.05);
     --mat-line-strong: rgba(255,255,255,.09);
 
     --paper: #FFFFFF;
-    --paper-2: #F2F4F7;
-    --paper-3: #E1E5EB;
+    --paper-2: #F5F2EC;
+    --paper-3: #E6E0D3;
 
-    --ink: #182233;
-    --ink-soft: #5C6B7E;
-    --ink-faint: #93A0B1;
+    --ink: #211C15;
+    --ink-soft: #6C6153;
+    --ink-faint: #A69A86;
 
-    --gold: #B08A2E;
+    --gold: #B4842A;
     --gold-hi: #E9BE58;
-    --gold-deep: #8A6A20;
-    --gold-soft: rgba(176,138,46,.12);
+    --gold-deep: #8C6620;
+    --gold-soft: rgba(180,132,42,.13);
 
-    --red: #C13A3A;
-    --red-deep: #972C2C;
-    --red-soft: rgba(193,58,58,.10);
+    --red: #B23F32;
+    --red-deep: #8C3026;
+    --red-soft: rgba(178,63,50,.10);
 
-    --teal: #2C6B72;
-    --teal-deep: #1E4C52;
-    --teal-soft: rgba(44,107,114,.10);
+    --teal: #3E6B4C;
+    --teal-deep: #2B4B36;
+    --teal-soft: rgba(62,107,76,.11);
 
     --radius-sm: 6px;
     --radius: 8px;
@@ -33,28 +33,28 @@
     /* layered shadows: a soft ambient layer + a tighter contact layer, used
        together so cards read as sitting slightly above the page rather than
        having one flat drop-shadow pasted under everything */
-    --shadow-sm: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.07);
-    --shadow: 0 2px 8px rgba(16,24,40,.06), 0 10px 26px rgba(16,24,40,.10);
-    --shadow-lg: 0 8px 20px rgba(16,24,40,.10), 0 26px 54px rgba(16,24,40,.16);
+    --shadow-sm: 0 1px 2px rgba(28,21,12,.07), 0 1px 3px rgba(28,21,12,.07);
+    --shadow: 0 2px 8px rgba(28,21,12,.06), 0 10px 26px rgba(28,21,12,.11);
+    --shadow-lg: 0 8px 20px rgba(28,21,12,.11), 0 26px 54px rgba(28,21,12,.17);
 
     --ease: cubic-bezier(.4,0,.2,1);
 
     /* page background — kept separate from --mat so it can switch for light
-       mode while the brand header/lock screen stay on the same navy brand
-       look in both themes */
-    --page-bg: #0B1C33;
+       mode while the brand header/lock screen stay on the same charcoal
+       brand look in both themes */
+    --page-bg: #1B1712;
     --page-fg: var(--paper);
   }
   .boot-loading{ color: var(--page-fg); padding:60px 0; text-align:center; letter-spacing:.2px; }
   /* ---------- light theme ---------- */
   [data-theme="light"]{
-    --page-bg: #EEF1F5;
+    --page-bg: #EFEAE0;
     --paper: #FFFFFF;
-    --paper-2: #F2F4F7;
-    --paper-3: #E1E5EB;
-    --shadow-sm: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.05);
-    --shadow: 0 1px 4px rgba(16,24,40,.04), 0 8px 20px rgba(16,24,40,.07);
-    --shadow-lg: 0 8px 18px rgba(16,24,40,.07), 0 22px 44px rgba(16,24,40,.11);
+    --paper-2: #F5F2EC;
+    --paper-3: #E6E0D3;
+    --shadow-sm: 0 1px 2px rgba(28,21,12,.05), 0 1px 3px rgba(28,21,12,.05);
+    --shadow: 0 1px 4px rgba(28,21,12,.04), 0 8px 20px rgba(28,21,12,.08);
+    --shadow-lg: 0 8px 18px rgba(28,21,12,.08), 0 22px 44px rgba(28,21,12,.12);
     --page-fg: var(--ink);
   }
   *{box-sizing:border-box;}
@@ -194,7 +194,7 @@
   .btn.red{ background: var(--red); color:#fff; }
   .btn.red:hover{ background: var(--red-deep); box-shadow: 0 2px 8px rgba(151,44,44,.3); }
   .btn.ghost{ background: transparent; color: var(--ink); border:1.5px solid var(--paper-3); box-shadow:none; }
-  .btn.ghost:hover{ background: rgba(15,23,42,.03); border-color: var(--ink-faint); }
+  .btn.ghost:hover{ background: rgba(28,21,12,.03); border-color: var(--ink-faint); }
   .btn:disabled{ opacity:.5; cursor:not-allowed; box-shadow:none; transform:none; }
   .btn.sm{ padding:6.5px 12px; font-size:12.5px; }
   .btn.icon-only{ padding:7px 9px; }
@@ -209,7 +209,7 @@
   td{ padding:11px 8px; border-bottom:1px solid var(--paper-2); vertical-align:middle; }
   tr:last-child td{ border-bottom:none; }
   tbody tr{ transition: background-color .12s var(--ease); }
-  tbody tr:hover{ background: rgba(15,23,42,.02); }
+  tbody tr:hover{ background: rgba(28,21,12,.02); }
   .num{ font-family:'IBM Plex Mono'; font-weight:600; font-variant-numeric: tabular-nums; }
   .muted{ color: var(--ink-soft); }
   .row-actions{ display:flex; gap:6px; justify-content:flex-end; }
@@ -281,11 +281,11 @@
   .fms-filter:focus{ border-color: var(--gold); outline:none; }
   .fms-list{ max-height:180px; overflow-y:auto; border:1.5px solid var(--paper-3); border-radius:var(--radius); padding:6px; display:flex; flex-direction:column; gap:2px; }
   .fms-item{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:6px; font-size:13.5px; cursor:pointer; margin:0; transition: background-color .12s var(--ease); }
-  .fms-item:hover{ background: rgba(15,23,42,.03); }
+  .fms-item:hover{ background: rgba(28,21,12,.03); }
   .fms-item input[type="checkbox"]{ width:16px; height:16px; accent-color: var(--gold); cursor:pointer; flex-shrink:0; }
 
   .overlay{
-    position:fixed; inset:0; background: rgba(11,28,51,.55); backdrop-filter: blur(3px);
+    position:fixed; inset:0; background: rgba(24,19,13,.55); backdrop-filter: blur(3px);
     display:flex; align-items:center; justify-content:center; z-index:50; padding:16px;
     animation: fadeIn .15s var(--ease);
   }
@@ -301,7 +301,7 @@
     position:absolute; top:13px; left:13px; background:none; border:none; color:var(--ink-faint);
     width:30px; height:30px; border-radius:50%; transition: background-color .15s var(--ease), color .15s var(--ease);
   }
-  .modal-close:hover{ background: rgba(15,23,42,.05); color: var(--ink); }
+  .modal-close:hover{ background: rgba(28,21,12,.05); color: var(--ink); }
 
   .confirm-box{ background: var(--red-soft); border:none; border-inline-start:3px solid var(--red); border-radius:var(--radius); padding:10px 13px; margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12.5px; }
 
@@ -317,7 +317,7 @@
 
   /* ---------- lightbox ---------- */
   .lightbox-overlay{
-    position:fixed; inset:0; background: rgba(8,14,24,.92); z-index:60;
+    position:fixed; inset:0; background: rgba(14,11,7,.92); z-index:60;
     display:flex; align-items:center; justify-content:center; padding:24px; cursor:zoom-out;
     animation: fadeIn .15s var(--ease);
   }
@@ -419,7 +419,7 @@
 
   .order-card{ cursor:pointer; transition: box-shadow .15s var(--ease), transform .1s var(--ease); }
   tr[data-open-customer]{ cursor:pointer; }
-  tr[data-open-customer]:hover{ background: rgba(15,23,42,.02); }
+  tr[data-open-customer]:hover{ background: rgba(28,21,12,.02); }
   .order-card:hover{ box-shadow: var(--shadow-lg); transform: translateY(-1px); }
   .back-link{ display:inline-flex; align-items:center; gap:6px; color: var(--paper); background:none; border:none; font-size:13.5px; margin-bottom:15px; font-weight:600; opacity:.85; transition: opacity .15s var(--ease); }
   .back-link:hover{ opacity:1; text-decoration:underline; }
