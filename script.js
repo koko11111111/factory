@@ -1701,7 +1701,7 @@
     <div class="ticket">
       <div class="ticket-body">
       <div class="table-scroll"><table><thead><tr>
-        <th>العميل</th><th>الطلبات</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>آخر طلبية</th><th></th>
+        <th>العميل</th><th>الطلبات</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>آخر طلبية</th>
       </tr></thead><tbody>
       ${list.map(c=>`<tr data-open-customer="${escapeHtml(c.name)}">
         <td><b>${escapeHtml(c.name)}</b></td>
@@ -1710,7 +1710,6 @@
         <td class="num mono">${fmt(c.paid)}</td>
         <td class="num mono" style="color:${c.balance>0?'#C1442E':'inherit'}">${fmt(c.balance)}</td>
         <td class="muted" style="font-size:12.5px;">${escapeHtml(c.lastDate||'—')}</td>
-        <td class="row-actions"><button class="btn ghost sm" data-action="openCustomerHistoryByName" data-name="${escapeHtml(c.name)}" onclick="event.stopPropagation()">🕘 السجل</button></td>
       </tr>`).join('')}
       </tbody></table></div>
       </div>
