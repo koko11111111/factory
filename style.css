@@ -172,6 +172,8 @@
   .btn.ghost:hover{ background: rgba(0,0,0,.05); }
   .btn.sm{ padding:6px 11px; font-size:13px; }
   .btn.icon-only{ padding:7px 9px; }
+  .btn .icon, .lightbox-close .icon, .modal-close .icon{ display:block; flex-shrink:0; }
+  .modal-close{ display:inline-flex; align-items:center; justify-content:center; }
 
   /* ---------- tables / lists ---------- */
   table{ width:100%; border-collapse:collapse; font-size:14px; }

@@ -777,6 +777,32 @@
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
+  // ---------- icon set ----------
+  // Small line-icon set (24x24 grid, currentColor stroke) used instead of
+  // emoji on buttons, so the UI reads as one consistent, professional style
+  // rather than mixed platform emoji. Icons pick up whatever text color the
+  // surrounding .btn already has (gold/teal/ghost/red), no extra styling
+  // needed per usage. `size` in px, default 16 (fits the compact buttons).
+  const ICON_PATHS = {
+    trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6.5 7l.8 12.1a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+    download: '<path d="M12 4v11.5"/><path d="M7.5 11l4.5 4.5 4.5-4.5"/><path d="M5 20h14"/>',
+    upload: '<path d="M12 20V8.5"/><path d="M7.5 13l4.5-4.5 4.5 4.5"/><path d="M5 20h14"/>',
+    key: '<circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5 19 4"/><path d="M15.5 8 18 10.5"/><path d="M12.5 11 14.5 13"/>',
+    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2.2M12 18.8V21M4.5 4.5l1.6 1.6M17.9 17.9l1.6 1.6M3 12h2.2M18.8 12H21M4.5 19.5l1.6-1.6M17.9 6.1l1.6-1.6"/>',
+    moon: '<path d="M20 14.3A8.4 8.4 0 1 1 9.7 4 7 7 0 0 0 20 14.3z"/>',
+    x: '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19.5 6.5"/>',
+    edit: '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.2 6.8l3 3"/>',
+    undo: '<path d="M4 10h9.5a5 5 0 0 1 0 10H12"/><path d="M4 10l4.2-4M4 10l4.2 4"/>',
+    image: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.3" cy="9.8" r="1.5"/><path d="M21 15.5l-5.3-5-4.4 4.2-2.2-2-6 5.6"/>',
+    folder: '<path d="M4 6.5a2 2 0 0 1 2-2h3.8l1.8 2H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-11z"/>',
+    chevronDown: '<path d="M6 9.5l6 6 6-6"/>',
+  };
+  function icon(name, size){
+    size = size || 16;
+    return `<svg class="icon" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]||''}</svg>`;
+  }
   function matches(text){
     if(!searchQuery.trim()) return true;
     return String(text||'').toLowerCase().includes(searchQuery.trim().toLowerCase());
@@ -797,7 +823,7 @@
   }
   function lightboxHtml(){
     return `<div class="lightbox-overlay" id="lightboxOverlay">
-      <button class="lightbox-close" data-action="closeLightbox" title="إغلاق">✕</button>
+      <button class="lightbox-close" data-action="closeLightbox" title="إغلاق">${icon('x',18)}</button>
       <img class="lightbox-img" src="${escapeHtml(lightboxImage)}" alt="">
     </div>`;
   }
@@ -1183,13 +1209,13 @@
         <div class="qstat"><b>${activeOrders().length}</b><span>طلبية نشطة</span></div>
         <div class="qstat"><b style="color:${low>0?'#C1442E':'#D9A441'}">${low}</b><span>قماش منخفض</span></div>
         ${overdue>0 ? `<div class="qstat"><b style="color:#C1442E">${overdue}</b><span>طلبية متأخرة ⚠️</span></div>` : ''}
-        <button class="btn ghost sm icon-only" data-action="toggleTheme" title="${theme==='dark'?'وضع فاتح':'وضع غامق'}" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${theme==='dark'?'☀️':'🌙'}</button>
-        <button class="btn ghost sm icon-only" data-action="openTrash" title="سلة المحذوفات" style="color:var(--paper); border-color:rgba(233,190,88,.35); position:relative;">🗑️${trashCount()>0?`<span class="trash-badge">${trashCount()}</span>`:''}</button>
-        <button class="btn ghost sm icon-only" data-action="exportBackup" title="تنزيل نسخة احتياطية من كل البيانات" style="color:var(--paper); border-color:rgba(233,190,88,.35);">⬇️</button>
-        <label class="btn ghost sm icon-only image-upload-btn" title="استرجاع نسخة احتياطية من ملف" style="color:var(--paper); border-color:rgba(233,190,88,.35);">⬆️<input type="file" accept="application/json,.json" class="visually-hidden" id="backupRestoreInput"></label>
+        <button class="btn ghost sm icon-only" data-action="toggleTheme" title="${theme==='dark'?'وضع فاتح':'وضع غامق'}" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${icon(theme==='dark'?'sun':'moon')}</button>
+        <button class="btn ghost sm icon-only" data-action="openTrash" title="سلة المحذوفات" style="color:var(--paper); border-color:rgba(233,190,88,.35); position:relative;">${icon('trash')}${trashCount()>0?`<span class="trash-badge">${trashCount()}</span>`:''}</button>
+        <button class="btn ghost sm icon-only" data-action="exportBackup" title="تنزيل نسخة احتياطية من كل البيانات" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${icon('download')}</button>
+        <label class="btn ghost sm icon-only image-upload-btn" title="استرجاع نسخة احتياطية من ملف" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${icon('upload')}<input type="file" accept="application/json,.json" class="visually-hidden" id="backupRestoreInput"></label>
         ${currentUid ? `
-        <button class="btn ghost sm icon-only" data-action="openChangePassword" title="تغيير كلمة السر" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔑</button>
-        <button class="btn ghost sm icon-only" data-action="lockApp" title="قفل" style="color:var(--paper); border-color:rgba(233,190,88,.35);">🔒</button>` : ''}
+        <button class="btn ghost sm icon-only" data-action="openChangePassword" title="تغيير كلمة السر" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${icon('key')}</button>
+        <button class="btn ghost sm icon-only" data-action="lockApp" title="قفل" style="color:var(--paper); border-color:rgba(233,190,88,.35);">${icon('lock')}</button>` : ''}
       </div>
     </div>`;
   }
@@ -1239,7 +1265,7 @@
   function changePasswordModalHtml(){
     return `<div class="overlay">
       <div class="modal">
-        <button class="modal-close" data-action="closeChangePassword">✕</button>
+        <button class="modal-close" data-action="closeChangePassword">${icon('x',18)}</button>
         <h3>تغيير كلمة السر</h3>
         <form id="changePasswordForm">
           <div class="field"><label>كلمة السر الحالية</label><input type="password" id="cpOld" required></div>
@@ -1533,9 +1559,9 @@
           <div class="ticket-meta"><span class="ticket-serial">${serialFor('STK', state.fabrics.length)}</span><span class="barcode"></span></div>
         </div>
         <div class="btn-group-wrap">
-          ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="exportFabricsCsv">⬇️ تصدير CSV</button>` : ''}
-          <button class="btn ghost sm" data-action="openExcelImport" data-kind="fabrics">📥 استيراد إكسل</button>
-          ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="fabrics">${bulk?'إلغاء التحديد':'✓ تحديد متعدد'}</button>` : ''}
+          ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="exportFabricsCsv">${icon('download')} تصدير CSV</button>` : ''}
+          <button class="btn ghost sm" data-action="openExcelImport" data-kind="fabrics">${icon('upload')} استيراد إكسل</button>
+          ${state.fabrics.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="fabrics">${bulk?icon('x')+' إلغاء التحديد':icon('check')+' تحديد متعدد'}</button>` : ''}
           <button class="btn gold" data-action="addFabric">+ إضافة قماش</button>
         </div>
       </div>
@@ -1543,7 +1569,7 @@
       <div class="ticket-body">
       <div class="section-note">كل صف يمثل كود قماش ولون معيّن، والمتبقي يُحسب تلقائيًا عند الإنتاج.</div>
       ${state.fabrics.length>0 ? searchRowHtml('ابحث بالكود أو اللون...') + imageMatchControlsHtml('fabrics') : ''}
-      ${bulk && selection.fabrics.size>0 ? `<div class="bulk-bar">محدد: ${selection.fabrics.size} <button class="btn red sm" data-action="bulkDeleteFabrics">🗑️ حذف المحدد</button></div>` : ''}
+      ${bulk && selection.fabrics.size>0 ? `<div class="bulk-bar">محدد: ${selection.fabrics.size} <button class="btn red sm" data-action="bulkDeleteFabrics">${icon('trash')} حذف المحدد</button></div>` : ''}
       ${state.fabrics.length===0 ? emptyHtml('🧵','لا يوجد قماش مسجل بعد. أضف أول رصيد من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
       <div class="table-scroll"><table><thead><tr>
@@ -1572,7 +1598,7 @@
           <td class="muted" style="font-size:12px;">${f.updatedAt ? new Date(f.updatedAt).toLocaleDateString('ar-EG') : '—'}</td>
           <td class="row-actions">
             <button class="btn ghost sm" data-action="editFabric" data-id="${f.id}">تعديل</button>
-            <button class="btn red sm icon-only" data-action="deleteFabric" data-id="${f.id}" title="حذف">✕</button>
+            <button class="btn red sm icon-only" data-action="deleteFabric" data-id="${f.id}" title="حذف">${icon('trash')}</button>
           </td>
         </tr>`;
       }).join('')}
@@ -1603,8 +1629,8 @@
           <div class="ticket-meta"><span class="ticket-serial">${serialFor('PRD', state.products.length)}</span><span class="barcode"></span></div>
         </div>
         <div class="btn-group-wrap">
-          <button class="btn ghost sm" data-action="openExcelImport" data-kind="products">📥 استيراد إكسل</button>
-          ${state.products.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="products">${bulk?'إلغاء التحديد':'✓ تحديد متعدد'}</button>` : ''}
+          <button class="btn ghost sm" data-action="openExcelImport" data-kind="products">${icon('upload')} استيراد إكسل</button>
+          ${state.products.length>0 ? `<button class="btn ghost sm" data-action="toggleBulkMode" data-kind="products">${bulk?icon('x')+' إلغاء التحديد':icon('check')+' تحديد متعدد'}</button>` : ''}
           <button class="btn gold" data-action="addProduct">+ إضافة منتج</button>
         </div>
       </div>
@@ -1612,7 +1638,7 @@
       <div class="ticket-body">
       <div class="section-note">لكل منتج رقم خاص به، وكمية جاهزة عندك دلوقتي (لو موجودة)، وربطه بقماش اختياري.</div>
       ${state.products.length>0 ? searchRowHtml('ابحث بالرقم أو الاسم أو القصة أو القماش...') + imageMatchControlsHtml('products') : ''}
-      ${bulk && selection.products.size>0 ? `<div class="bulk-bar">محدد: ${selection.products.size} <button class="btn red sm" data-action="bulkDeleteProducts">🗑️ حذف المحدد</button></div>` : ''}
+      ${bulk && selection.products.size>0 ? `<div class="bulk-bar">محدد: ${selection.products.size} <button class="btn red sm" data-action="bulkDeleteProducts">${icon('trash')} حذف المحدد</button></div>` : ''}
       ${state.products.length===0 ? emptyHtml('✂️','لا توجد منتجات بعد. أضف أول منتج من الزر أعلاه.') :
         list.length===0 ? emptyHtml('🔍', matchActive ? 'لا صور مطابقة لهذه الصورة' : 'لا توجد نتائج مطابقة للبحث') : `
       <div class="table-scroll"><table><thead><tr>${bulk?`<th><input type="checkbox" data-select-all="products" data-ids='${JSON.stringify(ids)}' ${allSelected?'checked':''}></th>`:''}<th></th><th>الرقم</th><th>الاسم</th><th>القصة</th><th>الجاهز عندك</th><th>القماش</th><th>متر/قطعة</th><th>السعر</th>${matchActive?'<th>تطابق الصورة</th>':''}<th></th></tr></thead><tbody>
@@ -1637,7 +1663,7 @@
           ${matchActive ? `<td><span class="badge match${idx===0?' best':''}">${pct}%</span></td>` : ''}
           <td class="row-actions">
             <button class="btn ghost sm" data-action="editProduct" data-id="${p.id}">تعديل</button>
-            <button class="btn red sm icon-only" data-action="deleteProduct" data-id="${p.id}" title="حذف">✕</button>
+            <button class="btn red sm icon-only" data-action="deleteProduct" data-id="${p.id}" title="حذف">${icon('trash')}</button>
           </td>
         </tr>`;
       }).join('')}
@@ -1661,7 +1687,7 @@
     <div class="toolbar">
       <h2 class="ticket-title">الطلبات</h2>
       <div class="toolbar-search">${state.orders.length>0 ? searchRowHtml('ابحث باسم الطلبية...') : ''}</div>
-      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?'🔽 إخفاء المكتملة':'✅ إظهار المكتملة'} (${completedCount})</button>` : ''}
+      ${completedCount>0 ? `<button class="btn ghost" data-action="toggleCompletedOrders" title="إظهار/إخفاء الطلبيات المكتملة">${showCompletedOrders?icon('chevronDown')+' إخفاء المكتملة':icon('check')+' إظهار المكتملة'} (${completedCount})</button>` : ''}
       <button class="btn gold" data-action="addOrder">+ طلبية جديدة</button>
     </div>
     ${completedCount>0 && !showCompletedOrders ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">✅ ${completedCount} طلبية مكتملة متخبية دلوقتي — دوس "إظهار المكتملة" فوق عشان تشوفها.</div>` : ''}
@@ -1675,7 +1701,7 @@
               <h2 class="ticket-title">${escapeHtml(o.name)} <span class="badge ${pr.complete?'done':'active'}">${pr.complete?'مكتملة':'قيد التنفيذ'}</span> ${orderDueBadge(o, pr)}</h2>
               <div class="ticket-meta"><span class="ticket-serial">${serialFor('ORD', o.id)}</span><span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')} · ${o.items.length} صنف</span></div>
             </div>
-            <button class="btn red sm icon-only" data-action="deleteOrder" data-id="${o.id}" title="حذف الطلبية" onclick="event.stopPropagation()">✕</button>
+            <button class="btn red sm icon-only" data-action="deleteOrder" data-id="${o.id}" title="حذف الطلبية" onclick="event.stopPropagation()">${icon('trash')}</button>
           </div>
           <div class="ticket-perf"></div>
           <div class="ticket-body">
@@ -1732,7 +1758,7 @@
             <span class="ticket-serial">${serialFor('ORD', o.id)}</span>
             <span class="muted" style="font-size:12px;">${escapeHtml(o.date||'')}</span>
             ${o.dueDate ? `<span class="muted" style="font-size:12px;">· التسليم: ${escapeHtml(o.dueDate)}</span> <span class="badge ${overdue?'overdue':(pr.complete?'':'due')}">${pr.complete?'✔️ اتسلمت':(overdue?'⚠️ ':'📅 ')+daysDiffLabel(o.dueDate)}</span>` : ''}
-            <button class="btn ghost sm icon-only" data-action="editOrder" data-id="${o.id}" title="تعديل بيانات الطلبية">✏️</button>
+            <button class="btn ghost sm icon-only" data-action="editOrder" data-id="${o.id}" title="تعديل بيانات الطلبية">${icon('edit')}</button>
           </div>
         </div>
         <div class="btn-group-wrap">
@@ -1774,7 +1800,7 @@
           <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
           <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
           <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
-          <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">✕</button>`}</div>
+          <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">${icon('trash')}</button>`}</div>
         </div>`;
       }).join('')}
       </div>
@@ -1841,7 +1867,7 @@
       <div class="color-row">
         <input type="text" name="mc_color_${idx}" placeholder="اللون (مثلاً: أحمر)" value="${escapeHtml(color||'')}">
         <input type="number" name="mc_qty_${idx}" placeholder="الكمية (متر)" min="0" step="0.1" value="${qty!==undefined && qty!==null && qty!=='' ? escapeHtml(qty) : ''}">
-        <button type="button" class="btn red sm icon-only" data-remove-color-row title="حذف اللون">✕</button>
+        <button type="button" class="btn red sm icon-only" data-remove-color-row title="حذف اللون">${icon('x')}</button>
       </div>
       <div class="color-row-image">
         <div class="image-preview sm" id="imgPreview_${imgKey}">
@@ -1849,8 +1875,8 @@
         </div>
         <input type="hidden" name="${imgKey}" id="imgInput_${imgKey}" value="${escapeHtml(img)}">
         <div class="image-actions">
-          <label class="btn ghost sm image-upload-btn">📁 صورة اللون<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${imgKey}"></label>
-          <button type="button" class="btn ghost sm" data-image-clear="${imgKey}" style="${img?'':'display:none;'}">✕ إزالة</button>
+          <label class="btn ghost sm image-upload-btn">${icon('image')} صورة اللون<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${imgKey}"></label>
+          <button type="button" class="btn ghost sm" data-image-clear="${imgKey}" style="${img?'':'display:none;'}">${icon('x')} إزالة</button>
         </div>
         <div class="image-url-row">
           <input type="text" placeholder="أو الصق رابط صورة مباشر (URL)" data-image-url-input="${imgKey}">
@@ -1916,8 +1942,8 @@
         </div>
         <input type="hidden" name="${f.key}" id="imgInput_${f.key}" value="${escapeHtml(url)}">
         <div class="image-actions">
-          <label class="btn ghost sm image-upload-btn">📁 رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
-          <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">✕ إزالة</button>
+          <label class="btn ghost sm image-upload-btn">${icon('image')} رفع صورة<input type="file" accept="image/*" class="visually-hidden" data-upload-for="${f.key}"></label>
+          <button type="button" class="btn ghost sm" data-image-clear="${f.key}" style="${url?'':'display:none;'}">${icon('x')} إزالة</button>
         </div>
         <div class="image-url-row">
           <input type="text" placeholder="أو الصق رابط صورة مباشر (URL)" data-image-url-input="${f.key}">
@@ -1930,7 +1956,7 @@
   function modalHtml(cfg){
     return `<div class="overlay" id="overlayEl">
       <div class="modal">
-        <button class="modal-close" data-action="closeModal">✕</button>
+        <button class="modal-close" data-action="closeModal">${icon('x',18)}</button>
         <h3>${escapeHtml(cfg.title)}</h3>
         <form id="modalForm">
           ${cfg.fields.map(fieldHtml).join('')}
@@ -1974,7 +2000,7 @@
     const totalBal = totalRev - totalPaid;
     return `<div class="overlay">
       <div class="modal" style="max-width:560px;">
-        <button class="modal-close" data-action="closeHistoryModal">✕</button>
+        <button class="modal-close" data-action="closeHistoryModal">${icon('x',18)}</button>
         <h3>🕘 سجل العميل: ${escapeHtml(name)}</h3>
         <div class="muted" style="font-size:12px;margin:-8px 0 14px;">${orders.length} طلبية بنفس الاسم</div>
         ${(totalRev>0 || totalPaid>0) ? `<div class="table-scroll" style="margin-bottom:14px;"><table><tbody>
@@ -2055,14 +2081,14 @@
             <div class="muted" style="font-size:11px;">هيتحذف نهائيًا خلال ${daysLeft(it.deletedAt)} يوم</div>
           </div>
           <div class="btn-group-wrap">
-            <button class="btn ghost sm" data-action="restoreTrashItem" data-kind="${kind}" data-id="${it.id}">↩️ استرجاع</button>
-            <button class="btn red sm icon-only" data-action="purgeTrashItem" data-kind="${kind}" data-id="${it.id}" title="حذف نهائي">✕</button>
+            <button class="btn ghost sm" data-action="restoreTrashItem" data-kind="${kind}" data-id="${it.id}">${icon('undo')} استرجاع</button>
+            <button class="btn red sm icon-only" data-action="purgeTrashItem" data-kind="${kind}" data-id="${it.id}" title="حذف نهائي">${icon('x')}</button>
           </div>
         </div>`).join('');
     }
     return `<div class="overlay">
       <div class="modal" style="max-width:520px;">
-        <button class="modal-close" data-action="closeTrash">✕</button>
+        <button class="modal-close" data-action="closeTrash">${icon('x',18)}</button>
         <h3>🗑️ سلة المحذوفات</h3>
         <div class="muted" style="font-size:12px;margin:-8px 0 14px;">العناصر المحذوفة بتتحذف نهائيًا تلقائيًا بعد ${TRASH_DAYS} يوم من حذفها</div>
         <div style="max-height:55vh;overflow-y:auto;">
@@ -2082,11 +2108,11 @@
     if(ex.headers.length===0){
       return `<div class="overlay">
         <div class="modal" style="max-width:480px;">
-          <button class="modal-close" data-action="closeExcelImport">✕</button>
+          <button class="modal-close" data-action="closeExcelImport">${icon('x',18)}</button>
           <h3>${title}</h3>
           <div class="section-note">اختار ملف إكسل (.xlsx/.xls) أو CSV — أول صف لازم يكون أسماء الأعمدة (عناوين)، وباقي الصفوف بياناتك.</div>
           ${ex.error ? `<div class="import-error">${escapeHtml(ex.error)}</div>` : ''}
-          <label class="btn gold" style="display:inline-flex;">📁 اختيار ملف<input type="file" accept=".xlsx,.xls,.csv" class="visually-hidden" id="excelFileInput"></label>
+          <label class="btn gold" style="display:inline-flex;">${icon('folder')} اختيار ملف<input type="file" accept=".xlsx,.xls,.csv" class="visually-hidden" id="excelFileInput"></label>
         </div>
       </div>`;
     }
@@ -2095,7 +2121,7 @@
     const validCount = rows.filter(r=>r.valid).length;
     return `<div class="overlay">
       <div class="modal" style="max-width:640px;">
-        <button class="modal-close" data-action="closeExcelImport">✕</button>
+        <button class="modal-close" data-action="closeExcelImport">${icon('x',18)}</button>
         <h3>${title}</h3>
         <div class="section-note">حدد كل عمود في ملفك بيمثل إيه — الحقول اللي فيها * لازم تتحدد، والباقي اختياري.</div>
         <div class="excel-map-grid">
@@ -2110,7 +2136,7 @@
         </div>
         ${excelPreviewHtml(rows)}
         <div class="modal-actions">
-          <button class="btn gold" data-action="runExcelImport" ${validCount===0?'disabled':''}>📥 استيراد ${validCount} صف</button>
+          <button class="btn gold" data-action="runExcelImport" ${validCount===0?'disabled':''}>${icon('upload')} استيراد ${validCount} صف</button>
           <button class="btn ghost" data-action="closeExcelImport">إلغاء</button>
         </div>
       </div>
@@ -2275,10 +2301,10 @@
     const active = !!imageMatchResults[context];
     const isUrlLike = qImg && /^https?:\/\//.test(qImg);
     return `<div class="image-match">
-      <button type="button" class="btn ghost sm" data-match-toggle="${context}">🖼️ ${active ? 'نتائج المطابقة بالصورة' : 'ابحث بالصورة'}</button>
+      <button type="button" class="btn ghost sm" data-match-toggle="${context}">${icon('image')} ${active ? 'نتائج المطابقة بالصورة' : 'ابحث بالصورة'}</button>
       <div class="image-match-panel ${open?'open':''}">
         <div class="image-match-row">
-          <label class="btn ghost sm image-upload-btn">📁 ارفع صورة<input type="file" accept="image/*" class="visually-hidden" data-match-upload="${context}"></label>
+          <label class="btn ghost sm image-upload-btn">${icon('image')} ارفع صورة<input type="file" accept="image/*" class="visually-hidden" data-match-upload="${context}"></label>
           <input type="text" placeholder="أو الصق رابط صورة" data-match-url="${context}" value="${isUrlLike ? escapeHtml(qImg) : ''}">
           <button type="button" class="btn gold sm" data-match-go="${context}">قارن</button>
           ${active ? `<button type="button" class="btn ghost sm" data-match-clear="${context}">إلغاء</button>` : ''}
