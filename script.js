@@ -552,21 +552,36 @@
     const hasReady = !!vals.hasReady;
     const fabricIds = usesFabric ? extractMultiSelectIds(vals, 'fabricIds') : [];
     if(usesFabric && fabricIds.length===0){ showToast("اختر لون قماش واحد على الأقل"); return; }
+    const readyQty = hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0;
+    const metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
     const base = {
       code: vals.code ? vals.code.trim() : '',
       name: vals.name.trim(),
       cut: vals.cut.trim(),
-      readyQty: hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0,
-      metersPerPiece: usesFabric ? (Number(vals.meters)||0) : 0,
+      readyQty,
+      metersPerPiece,
       price: vals.price ? Number(vals.price) : null,
       laborCostPerPiece: vals.laborCostPerPiece ? Number(vals.laborCostPerPiece) : null,
       image: vals.image || null,
       updatedAt: Date.now()
     };
+    // Declaring ready-made pieces already sitting there consumes fabric too
+    // (see editProduct) — even for a brand-new product, so the fabric's
+    // remaining meters reflect reality from the start.
+    const deductReadyFabric = (fid) => {
+      if(readyQty<=0) return;
+      const f = fabricById(fid);
+      if(!f) return;
+      const metersNeeded = readyQty * metersPerPiece;
+      if(metersNeeded > fabricRemaining(f)){
+        showToast("تنبيه: القماش المتبقي أقل من الكمية المطلوبة للإنتاج");
+      }
+      f.used = Math.max(0, (Number(f.used)||0) + metersNeeded);
+    };
     if(!usesFabric){
       state.products.push({ id: uid(), ...base, fabricId: null });
     } else {
-      fabricIds.forEach(fid => state.products.push({ id: uid(), ...base, fabricId: fid }));
+      fabricIds.forEach(fid => { state.products.push({ id: uid(), ...base, fabricId: fid }); deductReadyFabric(fid); });
     }
     save();
     showToast(fabricIds.length>1 ? `تمت إضافة ${fabricIds.length} منتجات (نسخة لكل لون)` : "تمت إضافة المنتج");
@@ -577,14 +592,31 @@
     if(!p) return;
     const usesFabric = !!vals.usesFabric;
     const hasReady = !!vals.hasReady;
+    const oldReadyQty = Number(p.readyQty)||0;
     p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim();
-    p.readyQty = hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0;
     p.fabricId = usesFabric ? (vals.fabricId || null) : null;
     p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
     p.price = vals.price ? Number(vals.price) : null;
     p.laborCostPerPiece = vals.laborCostPerPiece ? Number(vals.laborCostPerPiece) : null;
     p.image = vals.image || null;
     p.updatedAt = Date.now();
+    const newReadyQty = hasReady ? Math.max(0, Number(vals.readyQty)||0) : 0;
+    // "already ready" pieces consume fabric too, exactly like production
+    // inside an order does — so any change here (genuinely new pieces, or
+    // just fixing a wrong number) keeps the fabric's remaining meters
+    // accurate instead of drifting from what's really left on the roll.
+    const readyDelta = newReadyQty - oldReadyQty;
+    if(readyDelta !== 0 && p.fabricId){
+      const f = fabricById(p.fabricId);
+      if(f){
+        const metersDelta = readyDelta * (Number(p.metersPerPiece)||0);
+        if(readyDelta > 0 && metersDelta > fabricRemaining(f)){
+          showToast("تنبيه: القماش المتبقي أقل من الكمية المطلوبة للإنتاج");
+        }
+        f.used = Math.max(0, (Number(f.used)||0) + metersDelta);
+      }
+    }
+    p.readyQty = newReadyQty;
     save(); showToast("تم تعديل المنتج"); render();
   }
   function deleteProduct(id){
@@ -716,6 +748,19 @@
       onSubmit: vals => {
         const extra = Math.max(0, Number(vals.extra)||0);
         if(extra<=0){ showToast("اكتب رقم أكبر من صفر"); return; }
+        // Making new ready-made pieces consumes fabric too, same as
+        // marking pieces "produced" inside an order does — otherwise the
+        // fabric's remaining meters would silently drift from reality.
+        if(p.fabricId){
+          const f = fabricById(p.fabricId);
+          if(f){
+            const metersNeeded = extra * (Number(p.metersPerPiece)||0);
+            if(metersNeeded > fabricRemaining(f)){
+              showToast("تنبيه: القماش المتبقي أقل من الكمية المطلوبة للإنتاج");
+            }
+            f.used = Math.max(0, (Number(f.used)||0) + metersNeeded);
+          }
+        }
         p.readyQty = current + extra;
         p.updatedAt = Date.now();
         save(); showToast(`اتضافت ${fmt(extra)} قطعة (بقى عندك ${fmt(p.readyQty)})`); render();
