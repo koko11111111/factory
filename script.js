@@ -157,6 +157,7 @@
       if(raw) state = Object.assign(state, JSON.parse(raw));
     }catch(e){ /* ignore */ }
     purgeOldTrash();
+    migrateReadyStock();
 
     await waitForAppSync();
 
@@ -181,6 +182,7 @@
           expandImagesInPlace(remote, remoteImageCache);
           state = Object.assign(state, remote);
           purgeOldTrash();
+          migrateReadyStock();
         } else {
           // first login: seed the cloud with local data (photos go to their own docs, not inline)
           const { slim, toUpload } = buildSyncState();
@@ -193,9 +195,12 @@
           applyingRemoteUpdate = true;
           expandImagesInPlace(remoteState, remoteImageCache);
           state = Object.assign(state, remoteState);
+          const neededMigration = !state.__readyStockV2;
+          migrateReadyStock();
           try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
           render();
           applyingRemoteUpdate = false;
+          if(neededMigration) save(); // push the migrated numbers back up so every device converges
         });
         window.AppSync.subscribeImages(user.uid, (changedImages) => {
           // a photo was added/changed/removed (maybe from another device) —
@@ -270,28 +275,86 @@
   function fabricById(id){ return state.fabrics.find(f=>f.id===id); }
   function productById(id){ return state.products.find(p=>p.id===id); }
 
-  // If an order item's "produced" is typed higher than its "sold", that
-  // extra stock was made but hasn't gone out the door yet — it's sitting
-  // ready, same as manually-entered readyQty. `producedFromReady` (set once
-  // when the order item is created) is excluded so ready stock that was
-  // already drawn down to cover that order isn't counted twice.
-  function productSurplusReady(productId){
-    let surplus = 0;
-    state.orders.forEach(o=>{
-      o.items.forEach(it=>{
-        if(it.productId !== productId) return;
-        const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
-        surplus += Math.max(0, newlyProduced - (Number(it.sold)||0));
+  // ---------- ready-stock bookkeeping ----------
+  // p.readyQty is the SINGLE source of truth for "how many finished pieces
+  // of this product are sitting ready right now". It's kept accurate at all
+  // times (not recomputed on the fly) by these rules, applied on every
+  // change to an order item:
+  //   - producedFromReady: set once, when the item is created, to however
+  //     many pieces were immediately pulled from existing ready stock to
+  //     cover the order. Never changes after that.
+  //   - settledToReady: how much of this item's *newly made* production
+  //     (produced beyond producedFromReady) is currently unsold and has
+  //     therefore already been folded into p.readyQty. Recomputed any time
+  //     "produced" or "sold" changes, so p.readyQty stays in sync instead of
+  //     drifting.
+  // Deleting/restoring an item or a whole order fully reverses/reapplies
+  // its net effect on p.readyQty (see reverseOrderItemEffects/applyOrderItemEffects)
+  // so trash + undo never leaves stock numbers stuck or double-counted.
+  function effectiveReadyQty(p){ return Math.max(0, Number(p && p.readyQty)||0); }
+  function orderById(id){ return state.orders.find(o=>o.id===id); }
+
+  // Recomputes how much of this item's own overproduction is currently
+  // unsold ("newly produced" = produced minus whatever was pulled from ready
+  // stock at creation), and folds the *change* since last time into
+  // p.readyQty. Call after "produced" or "sold" changes.
+  function reconcileItemReadyStock(it){
+    const p = productById(it.productId);
+    if(!p) return;
+    const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+    const currentExcess = Math.max(0, newlyProduced - (Number(it.sold)||0));
+    const delta = currentExcess - (Number(it.settledToReady)||0);
+    if(delta !== 0){
+      p.readyQty = Math.max(0, (Number(p.readyQty)||0) + delta);
+      it.settledToReady = currentExcess;
+    }
+  }
+  // Fully undoes an order item's effect on the world: gives back any fabric
+  // meters its own new production consumed, gives back any ready stock it
+  // drew down at creation, and removes any surplus it had credited to ready
+  // stock. Used when deleting an item/order (or permanently discarding one).
+  function reverseOrderItemEffects(it){
+    const p = productById(it.productId);
+    if(!p) return;
+    const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+    if(p.fabricId){
+      const f = fabricById(p.fabricId);
+      if(f) f.used = Math.max(0, (Number(f.used)||0) - newlyProduced*(Number(p.metersPerPiece)||0));
+    }
+    p.readyQty = Math.max(0, (Number(p.readyQty)||0) + (Number(it.producedFromReady)||0) - (Number(it.settledToReady)||0));
+  }
+  // Mirror image of reverseOrderItemEffects — used when restoring a
+  // previously-deleted order from the trash, to re-apply what it had done.
+  function applyOrderItemEffects(it){
+    const p = productById(it.productId);
+    if(!p) return;
+    const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+    if(p.fabricId){
+      const f = fabricById(p.fabricId);
+      if(f) f.used = Math.max(0, (Number(f.used)||0) + newlyProduced*(Number(p.metersPerPiece)||0));
+    }
+    p.readyQty = Math.max(0, (Number(p.readyQty)||0) - (Number(it.producedFromReady)||0) + (Number(it.settledToReady)||0));
+  }
+  // One-time migration for data saved before settledToReady existed: folds
+  // whatever surplus (produced-beyond-ready, still unsold) each old order
+  // item represents into p.readyQty, exactly once, so upgrading never makes
+  // currently-visible ready stock disappear or double-count.
+  function migrateReadyStock(){
+    if(state.__readyStockV2) return;
+    (state.orders||[]).forEach(o=>{
+      (o.items||[]).forEach(it=>{
+        if(typeof it.producedFromReady !== 'number') it.producedFromReady = 0;
+        if(typeof it.settledToReady !== 'number'){
+          const p = productById(it.productId);
+          const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
+          const surplus = Math.max(0, newlyProduced - (Number(it.sold)||0));
+          it.settledToReady = surplus;
+          if(p && surplus>0) p.readyQty = Math.max(0, (Number(p.readyQty)||0) + surplus);
+        }
       });
     });
-    return surplus;
+    state.__readyStockV2 = true;
   }
-  // Total ready-to-sell stock for a product: what you told the app you
-  // already have, plus any unsold surplus from over-producing an order.
-  function effectiveReadyQty(p){
-    return (Number(p.readyQty)||0) + productSurplusReady(p.id);
-  }
-  function orderById(id){ return state.orders.find(o=>o.id===id); }
 
   // ---------- profit (revenue − material − labor − overhead) ----------
   // Every layer here is optional and degrades gracefully: an item with no
@@ -556,7 +619,9 @@
   }
   function deleteOrder(id){
     const o = orderById(id);
-    if(o) state.trash.orders.push({ ...o, deletedAt: Date.now() });
+    if(!o) return;
+    o.items.forEach(reverseOrderItemEffects);
+    state.trash.orders.push({ ...o, deletedAt: Date.now() });
     state.orders = state.orders.filter(o=>o.id!==id);
     if(activeOrderId===id){ activeOrderId=null; view="orders"; }
     purgeOldTrash();
@@ -565,15 +630,16 @@
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const ordered = Number(vals.ordered)||0;
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
     if(p && ordered>0 && (Number(p.readyQty)||0) > 0){
       fromReady = Math.min(ordered, Number(p.readyQty)||0);
       produced = fromReady;
-      p.readyQty = (Number(p.readyQty)||0) - fromReady;
+      p.readyQty = Math.max(0, (Number(p.readyQty)||0) - fromReady);
     }
-    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady });
+    o.items.push({ id: uid(), productId: vals.productId, ordered, produced, sold:0, producedFromReady: fromReady, settledToReady: 0 });
     if(fromReady>0){
       showToast(fromReady>=ordered ? `اتغطت الطلبية كلها من المخزون الجاهز (${fmt(fromReady)} قطعة)، مفيش داعي تنتج أكتر` : `اتغطى ${fmt(fromReady)} من ${fmt(ordered)} من المخزون الجاهز، والباقي محتاج إنتاج`);
     }
@@ -583,12 +649,15 @@
     const o = orderById(orderId);
     if(!o) return;
     if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
+    const it = o.items.find(i=>i.id===itemId);
+    if(it) reverseOrderItemEffects(it);
     o.items = o.items.filter(it=>it.id!==itemId);
     save(); render();
   }
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
+    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); render(); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -604,14 +673,21 @@
             if(delta > 0 && metersDelta > fabricRemaining(f)){
               showToast("تنبيه: القماش المتبقي أقل من الكمية المطلوبة للإنتاج");
             }
-            f.used = (Number(f.used)||0) + metersDelta;
-            if(f.used < 0) f.used = 0;
+            f.used = Math.max(0, (Number(f.used)||0) + metersDelta);
           }
         }
       }
       it.produced = num;
+      if(num < (Number(it.sold)||0)){
+        showToast("تنبيه: الكمية المنتَجة بقت أقل من الكمية المباعة");
+      }
+      reconcileItemReadyStock(it);
     } else if(field==="sold"){
       it.sold = num;
+      if(num > (Number(it.produced)||0)){
+        showToast("تنبيه: الكمية المباعة أكبر من الكمية المنتَجة");
+      }
+      reconcileItemReadyStock(it);
     } else if(field==="ordered"){
       it.ordered = num;
     }
@@ -735,7 +811,10 @@
   function bulkDeleteOrders(){
     const ids = Array.from(selection.orders);
     if(ids.length===0) return;
-    ids.forEach(id=>{ const o = orderById(id); if(o) state.trash.orders.push({ ...o, deletedAt: Date.now() }); });
+    ids.forEach(id=>{
+      const o = orderById(id);
+      if(o){ o.items.forEach(reverseOrderItemEffects); state.trash.orders.push({ ...o, deletedAt: Date.now() }); }
+    });
     state.orders = state.orders.filter(o => !ids.includes(o.id));
     if(ids.includes(activeOrderId)){ activeOrderId=null; view='orders'; }
     selection.orders.clear();
@@ -1762,7 +1841,7 @@
           </div>
         </div>
         <div class="btn-group-wrap">
-          <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
+          ${pr.complete ? '' : `<button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>`}
         </div>
       </div>
       <div class="ticket-perf"></div>
@@ -1797,9 +1876,9 @@
             ${thumbHtml(p&&p.image, p&&p.name)}
             <b>${label}</b>
           </div>
-          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
+          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
           <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">${icon('trash')}</button>`}</div>
         </div>`;
       }).join('')}
@@ -2061,6 +2140,7 @@
     delete item.deletedAt;
     state.trash.orders.splice(idx,1);
     state.orders.push(item);
+    (item.items||[]).forEach(applyOrderItemEffects);
     save(); showToast("اترجعت الطلبية"); render();
   }
   function purgeTrashItem(kind, id){

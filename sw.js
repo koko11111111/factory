@@ -6,13 +6,13 @@
 // Bump CACHE_NAME whenever you change the list of cached files, or whenever
 // you bump a "?v=" on script.js / style.css / firebase-init.js in index.html,
 // so old clients pick up the new set instead of being stuck on stale files.
-const CACHE_NAME = "factory-shell-v15";
+const CACHE_NAME = "factory-shell-v16";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./style.css?v=9",
-  "./script.js?v=18",
+  "./script.js?v=19",
   "./firebase-config.js",
   "./firebase-init.js?v=3",
   "./manifest.json",
