@@ -1,6 +1,11 @@
 (function(){
   "use strict";
 
+  // Bump this on every real deploy — it's shown in the top bar so you can
+  // glance at the app and instantly confirm whether an update actually
+  // reached this device (vs. still being served a stale cached copy).
+  const APP_VERSION = "2026.08.06-3";
+
   const LOW_STOCK_METERS = 10;
   const STORAGE_KEY = "factory-data";
 
@@ -630,7 +635,6 @@
   function addOrderItem(orderId, vals){
     const o = orderById(orderId);
     if(!o) return;
-    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const ordered = Number(vals.ordered)||0;
     const p = productById(vals.productId);
     let produced = 0, fromReady = 0;
@@ -648,7 +652,6 @@
   function deleteOrderItem(orderId, itemId){
     const o = orderById(orderId);
     if(!o) return;
-    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(it) reverseOrderItemEffects(it);
     o.items = o.items.filter(it=>it.id!==itemId);
@@ -657,7 +660,6 @@
   function updateOrderItemQty(orderId, itemId, field, value){
     const o = orderById(orderId);
     if(!o) return;
-    if(orderProgress(o).complete){ showToast("الطلبية دي مكتملة ومقفولة للتعديل"); render(); return; }
     const it = o.items.find(i=>i.id===itemId);
     if(!it) return;
     const num = Math.max(0, Number(value)||0);
@@ -950,7 +952,7 @@
         {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked:false, toggleTarget:'fabricGroup'},
         {type:'group', groupId:'fabricGroup', collapsed:true, fields:[
           {key:'fabricIds', type:'fabricMultiSelect', label:'ألوان القماش المستخدمة', options: fabricSearchOptions(), emptyMsg:'لا يوجد قماش مسجل بعد'},
-          {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', required:false}
+          {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.01', required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', required:false},
         {key:'laborCostPerPiece', label:'تكلفة العمالة لكل قطعة (اختياري، جنيه)', type:'number', step:'0.01', required:false},
@@ -974,7 +976,7 @@
         {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked: !!p.fabricId, toggleTarget:'fabricGroup'},
         {type:'group', groupId:'fabricGroup', collapsed: !p.fabricId, fields:[
           {key:'fabricId', label:'القماش المستخدم (اكتب للبحث)', type:'searchselect', options: fabricSearchOptions(), value:p.fabricId, required:false, emptyMsg:'لا يوجد قماش مسجل بعد'},
-          {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.1', value:p.metersPerPiece, required:false}
+          {key:'meters', label:'متر لكل قطعة', type:'number', step:'0.01', value:p.metersPerPiece, required:false}
         ]},
         {key:'price', label:'سعر البيع (اختياري)', type:'number', value:p.price||''},
         {key:'laborCostPerPiece', label:'تكلفة العمالة لكل قطعة (اختياري، جنيه)', type:'number', step:'0.01', value:p.laborCostPerPiece||'', required:false},
@@ -1279,7 +1281,7 @@
         </div>
         <div>
           <input class="brand-name" id="factoryNameInput" value="${escapeHtml(state.factoryName)}" />
-          <div class="brand-tag">${escapeHtml(todayLabel())}</div>
+          <div class="brand-tag">${escapeHtml(todayLabel())} <span style="opacity:.5;">· v${APP_VERSION}</span></div>
         </div>
       </div>
       <div class="quickstats">
@@ -1841,7 +1843,7 @@
           </div>
         </div>
         <div class="btn-group-wrap">
-          ${pr.complete ? '' : `<button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>`}
+          <button class="btn gold sm" data-action="addOrderItem" data-id="${o.id}">+ إضافة صنف</button>
         </div>
       </div>
       <div class="ticket-perf"></div>
@@ -1876,10 +1878,10 @@
             ${thumbHtml(p&&p.image, p&&p.name)}
             <b>${label}</b>
           </div>
-          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
-          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
-          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}" ${pr.complete?'disabled':''}></div>
-          <div class="del-cell">${pr.complete?'':`<button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">${icon('trash')}</button>`}</div>
+          <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
+          <div class="del-cell"><button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">${icon('trash')}</button></div>
         </div>`;
       }).join('')}
       </div>
