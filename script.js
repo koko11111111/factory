@@ -696,6 +696,54 @@
     save(); render();
   }
 
+  // ---------- quick "add extra" prompts ----------
+  // These exist because typing a number straight into the "الجاهز عندك" /
+  // "منتَج" fields SETS the total (needed so a typo can be fixed by just
+  // retyping the correct number) — so if you already have e.g. 5 ready and
+  // just made 3 more, typing "3" would wipe the total down to 3 instead of
+  // giving you 8. These "+" prompts ask for the NEW pieces only and add
+  // them on top of whatever's already there; the field itself is still the
+  // place to go to correct a wrong total directly.
+  function modalQuickAddReady(p){
+    const current = effectiveReadyQty(p);
+    openModal({
+      title: "إضافة كمية جاهزة جديدة",
+      submitLabel: "إضافة",
+      fields: [
+        {type:'info', html: `عندك دلوقتي <b>${fmt(current)}</b> قطعة جاهزة من "${escapeHtml(p.name)}". اكتب تحت بس الكمية <b>الجديدة</b> اللي هتتضاف.`},
+        {key:'extra', label:'كام قطعة جديدة عايز تضيفها؟', type:'number', required:true}
+      ],
+      onSubmit: vals => {
+        const extra = Math.max(0, Number(vals.extra)||0);
+        if(extra<=0){ showToast("اكتب رقم أكبر من صفر"); return; }
+        p.readyQty = current + extra;
+        p.updatedAt = Date.now();
+        save(); showToast(`اتضافت ${fmt(extra)} قطعة (بقى عندك ${fmt(p.readyQty)})`); render();
+      }
+    });
+  }
+  function modalQuickAddProduced(orderId, itemId){
+    const o = orderById(orderId);
+    if(!o) return;
+    const it = o.items.find(i=>i.id===itemId);
+    if(!it) return;
+    const p = productById(it.productId);
+    const current = Number(it.produced)||0;
+    openModal({
+      title: "إضافة إنتاج جديد",
+      submitLabel: "إضافة",
+      fields: [
+        {type:'info', html: `اتنتج لحد دلوقتي <b>${fmt(current)}</b> من ${fmt(it.ordered)} مطلوبة${p?(' — '+escapeHtml(p.name)):''}. اكتب تحت بس الكمية <b>الجديدة</b> اللي اتنتجت.`},
+        {key:'extra', label:'كام قطعة جديدة اتنتجت؟', type:'number', required:true}
+      ],
+      onSubmit: vals => {
+        const extra = Math.max(0, Number(vals.extra)||0);
+        if(extra<=0){ showToast("اكتب رقم أكبر من صفر"); return; }
+        updateOrderItemQty(orderId, itemId, "produced", current + extra);
+      }
+    });
+  }
+
   // ---------- sorting ----------
   function toggleSort(kind, by){
     const s = sortState[kind];
@@ -879,6 +927,7 @@
     image: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.3" cy="9.8" r="1.5"/><path d="M21 15.5l-5.3-5-4.4 4.2-2.2-2-6 5.6"/>',
     folder: '<path d="M4 6.5a2 2 0 0 1 2-2h3.8l1.8 2H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-11z"/>',
     chevronDown: '<path d="M6 9.5l6 6 6-6"/>',
+    plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   };
   function icon(name, size){
     size = size || 16;
@@ -971,7 +1020,7 @@
         {key:'cut', label:'القصة / الشكل', type:'text', value:p.cut, required:true},
         {key:'hasReady', label:'📦 عندي كمية جاهزة من المنتج ده دلوقتي', type:'checkbox', checked: (Number(p.readyQty)||0)>0, toggleTarget:'readyGroup'},
         {type:'group', groupId:'readyGroup', collapsed: !((Number(p.readyQty)||0)>0), fields:[
-          {key:'readyQty', label:'كام قطعة عندك جاهزة؟', type:'number', value:p.readyQty||0, required:false}
+          {key:'readyQty', label:'كام قطعة عندك جاهزة؟ (رقم إجمالي — لو غلطت، عدّله هنا)', type:'number', value:p.readyQty||0, required:false}
         ]},
         {key:'usesFabric', label:'🧵 مرتبط بقماش من المخزون', type:'checkbox', checked: !!p.fabricId, toggleTarget:'fabricGroup'},
         {type:'group', groupId:'fabricGroup', collapsed: !p.fabricId, fields:[
@@ -1729,7 +1778,7 @@
           ? (f ? escapeHtml(f.code+' — '+f.color) : '<span class="muted">قماش محذوف</span>')
           : '<span class="muted">—</span>';
         const readyQty = effectiveReadyQty(p);
-        const readyCell = readyQty>0 ? `<span class="badge ok">${fmt(readyQty)} قطعة</span>` : '<span class="muted">0</span>';
+        const readyCell = `<span class="ready-cell">${readyQty>0 ? `<span class="badge ok">${fmt(readyQty)} قطعة</span>` : '<span class="muted">0</span>'}<button type="button" class="btn ghost sm icon-only" data-action="quickAddReady" data-id="${p.id}" title="إضافة كمية جاهزة جديدة">${icon('plus',14)}</button></span>`;
         const pct = matchActive ? matchMap.get(p.id) : null;
         return `<tr>
           ${bulk?`<td><input type="checkbox" data-select="products:${p.id}" ${selection.products.has(p.id)?'checked':''}></td>`:''}
@@ -1879,7 +1928,7 @@
             <b>${label}</b>
           </div>
           <div><span class="mini-label">مطلوب</span><input type="number" min="0" value="${it.ordered}" data-oi="ordered" data-order="${o.id}" data-item="${it.id}"></div>
-          <div><span class="mini-label">منتَج</span><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}"></div>
+          <div><span class="mini-label">منتَج</span><div class="qty-with-add"><input type="number" min="0" value="${it.produced}" data-oi="produced" data-order="${o.id}" data-item="${it.id}" title="لو الرقم غلط، عدّله هنا مباشرة"><button type="button" class="btn ghost sm icon-only" data-action="quickAddProduced" data-order="${o.id}" data-item="${it.id}" title="إضافة إنتاج جديد">${icon('plus',14)}</button></div></div>
           <div><span class="mini-label">مباع</span><input type="number" min="0" value="${it.sold}" data-oi="sold" data-order="${o.id}" data-item="${it.id}"></div>
           <div class="del-cell"><button class="btn red sm icon-only" data-action="deleteOrderItem" data-order="${o.id}" data-item="${it.id}" title="حذف">${icon('trash')}</button></div>
         </div>`;
@@ -1898,6 +1947,9 @@
   }
 
   function fieldHtml(f){
+    if(f.type==='info'){
+      return `<div class="field-note">${f.html}</div>`;
+    }
     if(f.type==='select'){
       return `<div class="field"><label>${escapeHtml(f.label)}</label><select name="${f.key}" ${f.required?'required':''}>${f.optionsHtml}</select></div>`;
     }
@@ -2618,6 +2670,8 @@
         else if(action==='editProduct') modalEditProduct(productById(id));
         else if(action==='deleteProduct') askConfirm('هل تريد حذف هذا المنتج؟', ()=>deleteProduct(id));
         else if(action==='duplicateProduct') duplicateProduct(id);
+        else if(action==='quickAddReady'){ const p = productById(id); if(p) modalQuickAddReady(p); }
+        else if(action==='quickAddProduced') modalQuickAddProduced(el.getAttribute('data-order'), el.getAttribute('data-item'));
         else if(action==='toggleTheme') toggleTheme();
         else if(action==='exportBackup') exportBackup();
         else if(action==='openExcelImport') openExcelImport(el.getAttribute('data-kind'));
