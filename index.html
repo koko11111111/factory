@@ -33,9 +33,21 @@
   // screen and keeps working (loading the last cached shell) if opened
   // with no signal. Data itself still lives in localStorage / Firestore,
   // this only caches the app's own files (html/css/js/icons).
+  //
+  // Auto-reload once a NEW service worker takes control: without this,
+  // after pushing an update it can take several manual refreshes before a
+  // visitor actually sees it (the new worker installs in the background,
+  // but doesn't control the already-open page until it does). The `refreshed`
+  // guard stops this from looping if it ever fires more than once.
   if('serviceWorker' in navigator){
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').catch(()=>{ /* offline shell is a bonus, not required */ });
+    });
+    let refreshed = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if(refreshed) return;
+      refreshed = true;
+      window.location.reload();
     });
   }
 </script>
