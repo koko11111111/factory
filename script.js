@@ -163,6 +163,7 @@
     }catch(e){ /* ignore */ }
     purgeOldTrash();
     migrateReadyStock();
+    fixReadyStockV3();
 
     await waitForAppSync();
 
@@ -188,6 +189,7 @@
           state = Object.assign(state, remote);
           purgeOldTrash();
           migrateReadyStock();
+          fixReadyStockV3();
         } else {
           // first login: seed the cloud with local data (photos go to their own docs, not inline)
           const { slim, toUpload } = buildSyncState();
@@ -200,8 +202,9 @@
           applyingRemoteUpdate = true;
           expandImagesInPlace(remoteState, remoteImageCache);
           state = Object.assign(state, remoteState);
-          const neededMigration = !state.__readyStockV2;
+          const neededMigration = !state.__readyStockV2 || !state.__readyStockV3;
           migrateReadyStock();
+          fixReadyStockV3();
           try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
           render();
           applyingRemoteUpdate = false;
@@ -299,15 +302,19 @@
   function effectiveReadyQty(p){ return Math.max(0, Number(p && p.readyQty)||0); }
   function orderById(id){ return state.orders.find(o=>o.id===id); }
 
-  // Recomputes how much of this item's own overproduction is currently
-  // unsold ("newly produced" = produced minus whatever was pulled from ready
-  // stock at creation), and folds the *change* since last time into
-  // p.readyQty. Call after "produced" or "sold" changes.
+  // Recomputes how many pieces of THIS item are truly spare — produced
+  // beyond what the order itself still needs — and folds the *change*
+  // since last time into p.readyQty. It's produced vs. ordered (and sold,
+  // in case more got sold than was ever "ordered"), NOT produced vs. sold
+  // alone: a piece that's produced but not yet marked sold is still
+  // reserved for this order, not free to be pulled into a different one.
+  // Only genuine overproduction (finishing more than the order calls for)
+  // counts as ready stock. Call after "produced", "sold", or "ordered" changes.
   function reconcileItemReadyStock(it){
     const p = productById(it.productId);
     if(!p) return;
-    const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
-    const currentExcess = Math.max(0, newlyProduced - (Number(it.sold)||0));
+    const needed = Math.max(Number(it.ordered)||0, Number(it.sold)||0);
+    const currentExcess = Math.max(0, (Number(it.produced)||0) - needed);
     const delta = currentExcess - (Number(it.settledToReady)||0);
     if(delta !== 0){
       p.readyQty = Math.max(0, (Number(p.readyQty)||0) + delta);
@@ -340,6 +347,26 @@
     }
     p.readyQty = Math.max(0, (Number(p.readyQty)||0) - (Number(it.producedFromReady)||0) + (Number(it.settledToReady)||0));
   }
+  // A product's readyQty represents real physical pieces, which already
+  // consumed real fabric to exist (see editProduct/addProduct/modalQuickAddReady).
+  // These two keep that link correct when a product — and whatever ready
+  // stock is sitting on it — leaves or re-enters the active list, so
+  // trash/restore never leaves a fabric's "used" meters out of sync with
+  // what's actually been cut.
+  function refundReadyStockFabric(p){
+    if(!p || !p.fabricId) return;
+    const qty = Number(p.readyQty)||0;
+    if(qty<=0) return;
+    const f = fabricById(p.fabricId);
+    if(f) f.used = Math.max(0, (Number(f.used)||0) - qty*(Number(p.metersPerPiece)||0));
+  }
+  function deductReadyStockFabric(p){
+    if(!p || !p.fabricId) return;
+    const qty = Number(p.readyQty)||0;
+    if(qty<=0) return;
+    const f = fabricById(p.fabricId);
+    if(f) f.used = Math.max(0, (Number(f.used)||0) + qty*(Number(p.metersPerPiece)||0));
+  }
   // One-time migration for data saved before settledToReady existed: folds
   // whatever surplus (produced-beyond-ready, still unsold) each old order
   // item represents into p.readyQty, exactly once, so upgrading never makes
@@ -351,14 +378,27 @@
         if(typeof it.producedFromReady !== 'number') it.producedFromReady = 0;
         if(typeof it.settledToReady !== 'number'){
           const p = productById(it.productId);
-          const newlyProduced = (Number(it.produced)||0) - (Number(it.producedFromReady)||0);
-          const surplus = Math.max(0, newlyProduced - (Number(it.sold)||0));
+          const needed = Math.max(Number(it.ordered)||0, Number(it.sold)||0);
+          const surplus = Math.max(0, (Number(it.produced)||0) - needed);
           it.settledToReady = surplus;
           if(p && surplus>0) p.readyQty = Math.max(0, (Number(p.readyQty)||0) + surplus);
         }
       });
     });
     state.__readyStockV2 = true;
+  }
+  // One-time correction for data computed under the old (buggy) ready-stock
+  // formula, which counted anything produced-but-not-yet-"sold" as ready
+  // stock — even pieces still reserved for their own order. Re-runs the
+  // (now fixed) per-item reconciliation once so existing numbers converge
+  // to the corrected values instead of waiting for the next produced/sold/
+  // ordered edit on each item.
+  function fixReadyStockV3(){
+    if(state.__readyStockV3) return;
+    (state.orders||[]).forEach(o=>{
+      (o.items||[]).forEach(it=>{ reconcileItemReadyStock(it); });
+    });
+    state.__readyStockV3 = true;
   }
 
   // ---------- profit (revenue − material − labor − overhead) ----------
@@ -593,6 +633,14 @@
     const usesFabric = !!vals.usesFabric;
     const hasReady = !!vals.hasReady;
     const oldReadyQty = Number(p.readyQty)||0;
+    // snapshot BEFORE reassigning below — the ready pieces that already
+    // existed were made under whichever fabric/meters-per-piece was in
+    // effect until now, so any adjustment to that old quantity has to
+    // settle against that fabric, not whatever gets newly selected in
+    // this same edit (e.g. unlinking the fabric while also correcting the
+    // ready count must still refund the OLD fabric, not silently skip it).
+    const oldFabricId = p.fabricId;
+    const oldMetersPerPiece = Number(p.metersPerPiece)||0;
     p.code = vals.code ? vals.code.trim() : ''; p.name = vals.name.trim(); p.cut = vals.cut.trim();
     p.fabricId = usesFabric ? (vals.fabricId || null) : null;
     p.metersPerPiece = usesFabric ? (Number(vals.meters)||0) : 0;
@@ -606,10 +654,10 @@
     // just fixing a wrong number) keeps the fabric's remaining meters
     // accurate instead of drifting from what's really left on the roll.
     const readyDelta = newReadyQty - oldReadyQty;
-    if(readyDelta !== 0 && p.fabricId){
-      const f = fabricById(p.fabricId);
+    if(readyDelta !== 0 && oldFabricId){
+      const f = fabricById(oldFabricId);
       if(f){
-        const metersDelta = readyDelta * (Number(p.metersPerPiece)||0);
+        const metersDelta = readyDelta * oldMetersPerPiece;
         if(readyDelta > 0 && metersDelta > fabricRemaining(f)){
           showToast("تنبيه: القماش المتبقي أقل من الكمية المطلوبة للإنتاج");
         }
@@ -623,7 +671,10 @@
     const used = state.orders.some(o=>o.items.some(it=>it.productId===id));
     if(used){ showToast("لا يمكن حذف منتج مستخدم في طلبية"); return; }
     const p = productById(id);
-    if(p) state.trash.products.push({ ...p, image:null, deletedAt: Date.now() });
+    if(p){
+      refundReadyStockFabric(p); // give back the fabric its ready stock had consumed
+      state.trash.products.push({ ...p, image:null, deletedAt: Date.now() });
+    }
     state.products = state.products.filter(p=>p.id!==id);
     purgeOldTrash();
     save(); showToast("تم حذف المنتج (تقدر تسترجعه من 🗑️ خلال ٣٠ يوم)"); render();
@@ -724,6 +775,7 @@
       reconcileItemReadyStock(it);
     } else if(field==="ordered"){
       it.ordered = num;
+      reconcileItemReadyStock(it);
     }
     save(); render();
   }
@@ -895,7 +947,13 @@
     if(ids.length===0) return;
     const blocked = ids.filter(id => state.orders.some(o=>o.items.some(it=>it.productId===id)));
     const toDelete = ids.filter(id => !blocked.includes(id));
-    toDelete.forEach(id=>{ const p = productById(id); if(p) state.trash.products.push({ ...p, image:null, deletedAt: Date.now() }); });
+    toDelete.forEach(id=>{
+      const p = productById(id);
+      if(p){
+        refundReadyStockFabric(p);
+        state.trash.products.push({ ...p, image:null, deletedAt: Date.now() });
+      }
+    });
     state.products = state.products.filter(p => !toDelete.includes(p.id));
     selection.products.clear();
     purgeOldTrash();
@@ -2230,6 +2288,7 @@
     delete item.deletedAt;
     state.trash.products.splice(idx,1);
     state.products.push(item);
+    deductReadyStockFabric(item); // re-consume the fabric its ready stock represents
     save(); showToast("اترجع المنتج — الصورة (لو كانت موجودة) محتاجة تتضاف تاني"); render();
   }
   function restoreOrder(id){
